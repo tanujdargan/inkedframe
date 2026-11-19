@@ -355,6 +355,9 @@ void setup() {
   } else {
     uint32_t t = millis();  // button still down after 5 s means "forget Wi-Fi"
     while (cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW && millis() - t < HOLD_RESET_MS) delay(20);
+#ifdef TEST_FORGET_WIFI  // bench only: behave as if the button had been held
+    t = millis() - HOLD_RESET_MS;
+#endif
     session(millis() - t >= HOLD_RESET_MS);
   }
   sleepNow();
