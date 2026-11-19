@@ -4,7 +4,7 @@ import assert from 'node:assert';
 const html = readFileSync(new URL('../firmware/src/index.html', import.meta.url), 'utf8');
 const consts = html.match(/const W = [\s\S]*?const SATURATION[^\n]*\n/)[0];
 const code = html.match(/\/\/ DITHER-BEGIN[\s\S]*?\/\/ DITHER-END/)[0];
-const { dither, pack, PALETTE, W, H } = new Function(consts + code + '\nreturn { dither, pack, PALETTE, W, H };')();
+const { dither, pack, dominantInk, PALETTE, W, H } = new Function(consts + code + '\nreturn { dither, pack, dominantInk, PALETTE, W, H };')();
 
 // A solid field of each ink colour must come out almost entirely as that ink
 // (the saturation boost leaves a little error to diffuse, so not exactly 100%).
@@ -22,4 +22,18 @@ assert.strictEqual(packed.length, 128000);
 assert(packed.every(b => b < 216));
 assert(new Set(packed).size > 6, 'gradient should mix inks');
 assert.deepStrictEqual([...pack([5, 4, 3, 0, 1, 2])], [5*36 + 4*6 + 3, 0*36 + 1*6 + 2]);
+
+// Treatments. Duotone uses only black, white and the chosen ink; poster carries less error, so a
+// smooth gradient breaks into fewer, larger patches (fewer ink changes along each row).
+for (const ink of [2, 3, 4, 5]) {
+  const used = new Set(dither(g, 'duotone', ink));
+  assert.deepStrictEqual([...used].sort(), [0, 1, ink].sort(), `duotone ${ink} used ${[...used]}`);
+}
+const changes = idx => idx.reduce((n, v, i) => n + (i % W && v !== idx[i - 1]), 0);
+assert(changes(dither(g, 'poster')) < 0.8 * changes(dither(g)), 'poster should be flatter than natural');
+PALETTE.slice(2).forEach((rgb, k) => {  // a field of a slightly lighter shade of each ink picks that ink
+  const rgba = new Uint8ClampedArray(W * H * 4);
+  for (let i = 0; i < W * H; i++) rgba.set([...rgb.map(c => Math.min(255, c + 20)), 255], i * 4);
+  assert.strictEqual(dominantInk(rgba), k + 2, `dominant ink of ${rgb}`);
+});
 console.log('dither ok');
