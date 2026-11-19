@@ -19,7 +19,11 @@
   button.btn { width: 100%; margin-top: 20px; border: 0; font: inherit; font-size: 20px; }
   #saved { min-height: 1.5em; margin: 12px 0 0; text-align: center; }
   details { text-align: left; margin-top: 36px; color: #555; font-size: 16px; }
-  summary { cursor: pointer; }
+  summary { cursor: pointer; padding: 6px 0; }
+  .ph { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; align-items: center; margin-top: 16px; }
+  .ph canvas { display: block; margin: 0; grid-row: span 3; }
+  .ph button { font: inherit; font-size: 16px; padding: 10px; border-radius: 10px; border: 1px solid #bbb; background: #fff; color: #222; }
+  .ph label { grid-column: 2; }
 </style>
 <h1>Photo frame</h1>
 <label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
@@ -39,6 +43,10 @@
   <p id="saved" role="status" aria-live="polite"></p>
 </form>
 <p id="info"></p>
+<details id="photos">
+  <summary>Photos on the frame</summary>
+  <div id="list"></div>
+</details>
 <details>
   <summary>Advanced</summary>
   <p>Firmware version: <span id="ver"></span></p>
@@ -136,7 +144,8 @@ pick.onchange = async e => {
     }
     msg.textContent = 'Sent. The frame takes about half a minute to change.';
   } catch (err) {
-    msg.textContent = 'That did not work. Press the button on the frame and try again.';
+    msg.textContent = err.message == 'full' ? 'The frame is full of kept photos. Delete one under "Photos on the frame" first.'
+      : 'That did not work. Press the button on the frame and try again.';
   }
   busy = false;
   e.target.value = '';
@@ -170,7 +179,53 @@ document.getElementById('update').onclick = async () => {
   }
 };
 
+// Thumbnails: fetched one at a time when the section is opened (the frame serves one request at a time).
+const list = document.getElementById('list'), photos = document.getElementById('photos');
+let stored = [];
+function unpack(bytes, px) {  // the reverse of pack(), into RGBA
+  for (let i = 0; i < W * H; i++) {
+    const b = bytes[i / 3 | 0], p = b > 215 ? 1 : [b / 36 | 0, (b / 6 | 0) % 6, b % 6][i % 3];
+    px.set(PALETTE[p], i * 4);
+    px[i * 4 + 3] = 255;
+  }
+}
+async function act(seq, what) {
+  const r = await fetch(`/photo?seq=${seq}&do=${what}`, { method: 'POST' });
+  if (!r.ok) throw 0;
+}
+photos.ontoggle = async () => {
+  if (!photos.open || list.childElementCount) return;
+  if (!stored.length) list.textContent = 'No photos yet.';
+  const full = document.createElement('canvas'), fctx = full.getContext('2d');
+  full.width = W; full.height = H;
+  const px = fctx.createImageData(W, H);
+  for (const [seq, meta] of stored) {
+    const row = document.createElement('div'), c = document.createElement('canvas');
+    row.className = 'ph';
+    c.width = 200; c.height = 120;
+    c.setAttribute('aria-label', `Photo ${seq}`);
+    const show = document.createElement('button'), del = document.createElement('button');
+    show.textContent = 'Show now'; del.textContent = 'Delete';
+    const keep = document.createElement('label');
+    keep.innerHTML = '<input type="checkbox"> Keep';
+    const box = keep.firstChild;
+    box.checked = meta & 0x8000;
+    row.append(c, show, del, keep);
+    list.append(row);
+    show.onclick = () => act(seq, 'show').then(() => show.textContent = 'Shown when you close this page', () => show.textContent = 'Failed');
+    del.onclick = () => confirm('Delete this photo from the frame?') && act(seq, 'delete').then(() => row.remove(), () => del.textContent = 'Failed');
+    box.onchange = () => act(seq, box.checked ? 'keep' : 'unkeep').catch(() => box.checked = !box.checked);
+    try {
+      const r = await fetch(`/photo?seq=${seq}`);
+      unpack(new Uint8Array(await r.arrayBuffer()), px.data);
+      fctx.putImageData(px, 0, 0);
+      c.getContext('2d').drawImage(full, 0, 0, 200, 120);
+    } catch (e) { msg.textContent = ASLEEP; return; }
+  }
+};
+
 fetch('/status').then(r => r.json()).then(s => {
+  stored = s.list;
   document.getElementById('info').textContent =
     `${s.photos} of ${s.max} photos stored` + (s.battery_pct >= 0 ? ` · Battery ${Math.min(100, s.battery_pct)}%` : '');
   document.getElementById('ver').textContent = s.version;

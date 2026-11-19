@@ -69,7 +69,8 @@ Preferences prefs;
 WebServer server(80);
 volatile bool provStarted, gotIp, credFail;
 uint32_t lastActivity, lastUpload, byeAt;  // byeAt: when the page was closed
-bool uploaded, changed, toUpdater;
+bool uploaded, changed, toUpdater, full;
+uint32_t showSeq;  // shown when the session ends: the newest upload or the one picked with "Show now"
 bool pending;  // a new firmware from the updater that has not yet proved itself
 bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
 bool lowBattery;  // draw a small battery sign on the picture
@@ -104,6 +105,17 @@ String photoPath(uint32_t seq) {
   char p[16];
   snprintf(p, sizeof p, "/%08u.bin", (unsigned)seq);
   return p;
+}
+
+// Per photo, in the settings: KEEP (never dropped for a new upload) and a pinned date, month * 100 + day.
+const uint16_t KEEP = 0x8000;
+String metaKey(uint32_t seq) { return "m" + String(seq); }
+uint16_t meta(uint32_t seq) { return prefs.getUShort(metaKey(seq).c_str(), 0); }
+
+void removePhoto(uint32_t seq) {
+  Serial.printf("remove %s\n", photoPath(seq).c_str());
+  LittleFS.remove(photoPath(seq));
+  prefs.remove(metaKey(seq).c_str());
 }
 
 // ---------- settings and clock ----------
@@ -573,12 +585,11 @@ void handleUpload() {
   active();
   if (up.status == UPLOAD_FILE_START) {
     uint32_t seqs[MAX_PHOTOS + 1];
-    int n = listPhotos(seqs);
-    for (int i = 0; i <= n - MAX_PHOTOS; i++) {  // make room: drop the oldest
-      Serial.printf("drop %s\n", photoPath(seqs[i]).c_str());
-      LittleFS.remove(photoPath(seqs[i]));
-    }
-    f = LittleFS.open("/up.tmp", "w");
+    int n = listPhotos(seqs), drop = n - MAX_PHOTOS + 1;
+    for (int i = 0; i < n && drop > 0; i++)  // make room: drop the oldest that is not kept or pinned
+      if (!meta(seqs[i])) removePhoto(seqs[i]), drop--;
+    full = drop > 0;  // all kept or pinned: refuse
+    f = full ? File() : LittleFS.open("/up.tmp", "w");
     got = 0;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     got += up.currentSize;
@@ -589,6 +600,7 @@ void handleUpload() {
       uint32_t seq = prefs.getUInt("seq", 0) + 1;
       prefs.putUInt("seq", seq);
       uploaded = LittleFS.rename("/up.tmp", photoPath(seq));
+      if (uploaded) showSeq = seq;
       lastUpload = millis();
       Serial.printf("stored %s, file system %u of %u bytes used\n", photoPath(seq).c_str(), LittleFS.usedBytes(), LittleFS.totalBytes());
     } else {
@@ -676,12 +688,14 @@ void session(bool resetWifi) {
   server.on("/status", HTTP_GET, [] {
     active();
     uint32_t seqs[MAX_PHOTOS + 1];
-    int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ);  // SOC: the high byte is whole percent
-    char json[300];
-    snprintf(json, sizeof json,
-             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\"}",
-             listPhotos(seqs), MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
+    int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ), n = listPhotos(seqs);  // SOC: the high byte is whole percent
+    char json[600];
+    int len = snprintf(json, sizeof json,
+             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
+             n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
              prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
+    for (int i = n - 1; i >= 0; i--) len += snprintf(json + len, sizeof json - len, "[%u,%u]%s", seqs[i], meta(seqs[i]), i ? "," : "]}");
+    if (!n) strcat(json, "]}");
     server.send(200, "application/json", json);
   });
   server.on("/settings", HTTP_POST, [] {
@@ -732,8 +746,24 @@ void session(bool resetWifi) {
   });
   server.on("/upload", HTTP_POST, [] {
     bool ok = uploaded && millis() - lastUpload < 1000;
-    server.send(ok ? 200 : 400, "text/plain", ok ? "ok" : "not a frame photo");
+    server.send(ok ? 200 : 400, "text/plain", ok ? "ok" : full ? "full" : "not a frame photo");
   }, handleUpload);
+  server.on("/photo", HTTP_GET, [] {  // ?seq=
+    active();
+    File f = LittleFS.open(photoPath(server.arg("seq").toInt()));
+    if (f) server.streamFile(f, "application/octet-stream");
+    else server.send(404);
+  });
+  server.on("/photo", HTTP_POST, [] {  // ?seq= & do=delete|show|keep|unkeep
+    active();
+    uint32_t seq = server.arg("seq").toInt();
+    String a = server.arg("do");
+    if (!LittleFS.exists(photoPath(seq))) return server.send(404);
+    if (a == "delete") removePhoto(seq);
+    else if (a == "show") showSeq = seq;
+    else prefs.putUShort(metaKey(seq).c_str(), a == "keep" ? meta(seq) | KEEP : meta(seq) & ~KEEP);
+    server.send(200, "text/plain", "ok");
+  });
   server.begin();
   Serial.println("serving");
   if (pending) {  // joined Wi-Fi and serving: the new firmware is good
@@ -762,14 +792,12 @@ void session(bool resetWifi) {
   }
   server.stop();
   if (online()) Serial.printf("synced %d\n", syncClock());
-  bool art = prefs.getUChar("show", 0) && changed && !uploaded;
+  bool art = prefs.getUChar("show", 0) && changed && !showSeq;
   if (art) fetchArt(millis() + 30000);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  uint32_t seqs[MAX_PHOTOS + 1];
-  int n = listPhotos(seqs);
-  if (uploaded && n) showPhoto(seqs[n - 1]);
+  if (showSeq) showPhoto(showSeq);
   else if (art) showFile("/art.bin");
   else if (changed) showPhoto(prefs.getUInt("cur", 0));  // redraw with the new date setting
 }
