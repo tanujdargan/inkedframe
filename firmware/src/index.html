@@ -13,8 +13,8 @@
   #look > label { display: inline-block; margin: 0 14px 10px 0; color: #222; font-size: 18px; }
   #look #inkrow { display: none; width: 100%; margin: 0; color: #555; font-size: 16px; }
   #look:has([value=duotone]:checked) #inkrow { display: block; }
-  #pinbox { margin: 0 0 20px; }
-  #pinbox label { display: block; margin-top: 10px; }
+  #pinbox, #capbox { margin: 0 0 20px; }
+  #pinbox label, #capbox label { display: block; margin-top: 10px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .hint { margin: 4px 0; }
   #pick { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -53,6 +53,11 @@
     <label>Day <select id="day"><option value="">–</option></select></label>
   </div>
   <label>Greeting on the photo <input id="greet" maxlength="40" placeholder="Happy birthday!"></label>
+</details>
+<details id="capbox">
+  <summary>Add a caption (optional)</summary>
+  <label>Message <input id="note" maxlength="60"></label>
+  <label>From <input id="from" maxlength="30"></label>
 </details>
 <label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
 <p id="msg" role="status" aria-live="polite"></p>
@@ -181,9 +186,10 @@ const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov
 MONTHS.forEach((m, i) => month.add(new Option(m, i + 1)));
 for (let d = 1; d <= 31; d++) day.add(new Option(d, d));
 
-// The greeting goes in a white band across the top, in red, drawn as text after dithering.
+// The greeting (red) and caption (black) go in a white band across the top, drawn after dithering.
 function band(idx) {
-  const lines = [[greet.value.trim(), 'bold', 56, 3]].filter(l => l[0]);
+  const v = id => document.getElementById(id).value.trim(), from = v('from');
+  const lines = [[v('greet'), 'bold', 56, 3], [v('note'), '', 36, 0], [from && '– ' + from, 'italic', 30, 0]].filter(l => l[0]);
   if (!lines.length) return;
   const c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
   c.width = W; c.height = H;
