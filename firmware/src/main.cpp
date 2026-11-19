@@ -684,9 +684,10 @@ void daily() {
   WiFi.mode(WIFI_STA);
   WiFi.begin();
   while (WiFi.status() != WL_CONNECTED && millis() < deadline - 20000) delay(50);  // up to 10 s
+  uint32_t joined = millis();
   bool synced = WiFi.status() == WL_CONNECTED && syncClock();
-  Serial.printf("wifi %d, synced %d at %lu ms, clock %ld, local day second %ld, heap %u\n", WiFi.status() == WL_CONNECTED,
-                synced, millis(), (long)time(nullptr), (long)(localNow() % 86400), ESP.getFreeHeap());
+  Serial.printf("wifi %d at %lu ms, synced %d at %lu ms, clock %ld, local day second %ld, heap %u\n", WiFi.status() == WL_CONNECTED,
+                joined, synced, millis(), (long)time(nullptr), (long)(localNow() % 86400), ESP.getFreeHeap());
 #if ROTATE_SECONDS == 86400
   if (clockSet() && localNow() % 86400 >= 43200) return;  // woke before midnight: sleepNow() sleeps the rest
 #endif
