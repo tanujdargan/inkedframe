@@ -336,7 +336,7 @@ uint16_t batteryMv() {  // 0 if absent
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilHalfPastMidnight(localNow() % 86400);
 #endif
-  Serial.printf("sleep %u s, awake %lu ms\n", (unsigned)secs, millis());
+  Serial.printf("sleep %u s, awake %lu ms, flat %d\n", (unsigned)secs, millis(), prefs.getUChar("flat", 0));
   Serial.flush();
   server.stop();
   WiFi.disconnect(true);
