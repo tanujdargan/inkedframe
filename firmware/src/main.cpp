@@ -373,6 +373,7 @@ void drawToday(Adafruit_GFX &g, time_t t) {
 
 bool showToday() {
   if (!clockSet()) return false;  // keep the picture until the clock has been set
+  Serial.println("show today");
   paint([](Adafruit_GFX &g) { drawToday(g, localNow()); });
   return true;
 }

@@ -2,22 +2,33 @@
 
 # inkedframe
 
-inkedframe is an open-source battery photo frame, designed to be built and given as a gift. It uses an Adafruit Feather ESP32-S3 (4 MB flash, 2 MB PSRAM, product 5477), a Waveshare 7.3" Spectra 6 (E6) colour e-ink panel (800x480, six inks) and a 2000 mAh LiPo cell. There is no cloud, no account and no app for daily use. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off. Optionally it can print today's date on the picture, or show a different random photograph from the internet each day.
+inkedframe is an open-source battery photo frame, designed to be built and given as a gift. It uses an Adafruit Feather ESP32-S3 (4 MB flash, 2 MB PSRAM, product 5477), a Waveshare 7.3" Spectra 6 (E6) colour e-ink panel (800x480, six inks) and a 2000 mAh LiPo cell. There is no cloud, no account and no app for daily use. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off. Optionally it can print today's date on the picture, show a different museum painting or print each day, or show a calendar page.
 
 ## How it is used
 
 The person receiving the frame does a one-time setup. The frame draws a QR code and instructions on its own screen. They install Espressif's free "ESP BLE Provisioning" app (iOS and Android), scan the code and pick their Wi-Fi network. Bluetooth is used only for this step.
 
-To add photos, they press the button on the frame, then open `http://frame.local` on a phone or laptop on the same Wi-Fi, and choose one or more photos. Once uploads stop for a few seconds the frame shows the newest photo and sleeps. After that it changes photo by itself once a day, cycling through the stored ones. When there are already 10 photos, a new upload removes the oldest.
+To add photos, they press the button on the frame, then open `http://frame.local` on a phone or laptop on the same Wi-Fi, and choose one or more photos. Once uploads stop for a few seconds, or the page is closed, the frame shows the newest photo and sleeps. After that it changes photo by itself once a day, cycling through the stored ones. When there are already 10 photos, a new upload removes the oldest one that is not kept or pinned.
+
+Before choosing photos, the page offers:
+
+- **Look**: Natural (default), Poster (flatter areas of colour) or Duotone (black, white and one ink: the one closest to the photo's main colour, or red, blue, yellow or green). The phone remembers the choice.
+- **Show on a date** (collapsed): a month and day. The photo is then shown on that day every year, instead of the usual picture, and is not part of the daily rotation. An optional greeting is printed in red in a white band across the top.
+- **Add a caption** (collapsed): a message and a "from" line, printed in black in the same band.
+
+The browser draws the band and its text after dithering, so the letters stay sharp.
 
 The upload page also has a small settings form (saved on the frame, kept across power loss):
 
-- **Show**: "My photos" (default) or "Random artwork", a new random landscape-format photograph every day instead of the stored photos.
+- **Show**: "My photos" (default), "Artwork" (a new picture every day instead of the stored photos) or "Today" (a calendar page: the day number in red, the weekday, month and year, and the moon's phase).
+- **Artwork**: "Museum art" (default: one of 223 public-domain paintings and prints from the Metropolitan Museum of Art, with its title and artist in a strip along the bottom) or "Random photos" (a random landscape-format photograph from Lorem Picsum).
 - **Date**: Off (default), Corner (a short date such as "Thu 19 Nov" in the bottom right corner), Banner (a white strip along the bottom with the weekday and full date) or Big (a large day number with the month and weekday, bottom left). The date is black on a white box so it can be read over any picture.
 - **Time zone**: Automatic (default: looked up from the frame's internet address each day) or a fixed UTC offset.
-- **Unsplash access key** (optional): with a free key from unsplash.com/developers, Random artwork asks Unsplash for a landscape photo instead of using Lorem Picsum.
+- **Unsplash access key** (optional): with a free key from unsplash.com/developers, Random photos asks Unsplash for a landscape photo instead of using Lorem Picsum.
 
-After Save, the frame redraws about a minute later with the new settings. The page also shows the battery charge in percent. A collapsed "Advanced" section at the bottom shows the firmware version and has the "Update firmware" button (see [Firmware updates](#firmware-updates)).
+After Save, the frame redraws about a minute later with the new settings. The page also shows the battery charge in percent. A collapsed "Photos on the frame" section lists the stored photos as small pictures, each with "Show now" (shown when the page is closed), "Delete" and "Keep" (a kept photo is never removed to make room). A collapsed "Advanced" section at the bottom shows the firmware version and has the "Update firmware" button (see [Firmware updates](#firmware-updates)).
+
+Closing the page (or leaving it) tells the frame to finish at once, unless photos are still being sent or the photo picker is open. Reloading the page within 2 seconds cancels that. If the frame has already gone to sleep, the page says to press the button.
 
 The button does two things:
 
@@ -75,9 +86,10 @@ Everything happens in `setup()`, then the chip goes back to deep sleep. What hap
 
 | Wake cause | What the frame does |
 | --- | --- |
-| Timer (every 24 hours), Date off and My photos | Shows the next older stored photo, wrapping to the newest. Radio stays off. Does nothing with fewer than 2 photos or when the battery is below 3.4 V. |
-| Timer (00:30 local time), Date on or Random artwork | Joins Wi-Fi, sets the clock by NTP (`pool.ntp.org`) and, for Automatic time zone, looks up the UTC offset at `http://ip-api.com`. Then fetches the day's artwork or steps to the next photo, and draws it with the date. Does nothing when the battery is below 3.4 V. |
-| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (30 seconds after a settings change), stores uploads and settings, and shows the newest photo 4 seconds after the last upload. |
+| Timer (every 24 hours), Date off, My photos, nothing pinned | Shows the next older stored photo that is not pinned, wrapping to the newest. Radio stays off. Does nothing with fewer than 2 photos. |
+| Timer (00:30 local time), Date on, Artwork, Today or a pinned photo | Joins Wi-Fi, sets the clock by NTP (`pool.ntp.org`) and, for Automatic time zone, looks up the UTC offset at `http://ip-api.com`. Then shows the photo pinned to today if there is one, otherwise fetches the day's artwork, draws the Today page or steps to the next photo, with the date. |
+| Timer, battery low | See [Low battery](#low-battery). |
+| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (30 seconds after a settings change), stores uploads and settings, and shows the newest photo (or the one picked with "Show now") 4 seconds after the last upload or 2 seconds after the page was closed. |
 | Button held 5 seconds | Forgets the stored Wi-Fi and runs Bluetooth setup again. |
 | No Wi-Fi stored | Runs Bluetooth setup and draws the QR code on the panel. Setup stays open for 10 minutes. |
 
@@ -106,11 +118,27 @@ What it does not protect against:
 - A new app that joins Wi-Fi and starts its web server but is broken in some other way (the panel, the photos, sleep) is kept. Rollback only proves that the next update will be possible.
 - The updater itself, the boot loader and the partition table can only be changed over USB.
 
+### Low battery
+
+The fuel gauge's cell voltage is read at each timer wake. The thresholds are `WARN_BATTERY_MV`, `LOW_BATTERY_MV` and `CHARGED_MV` at the top of `main.cpp`.
+
+- Below 3.55 V, each daily picture gets a small battery sign in the top right corner.
+- Below 3.4 V, the frame draws one screen, "Please plug me in with the USB-C cable. I'll be back once I'm charged.", and remembers that it did. A refresh on a flat cell can brown out half-drawn, so after that it neither refreshes nor uses Wi-Fi: it wakes for about half a second, reads the voltage and sleeps again.
+- Above 3.9 V (on charge), it goes back to normal at the next wake. A photo shown from the upload page also replaces the screen.
+
+The button and power-on always open the upload page, whatever the voltage.
+
 ### Date and artwork
 
 The chip's deep-sleep timer runs from an internal RC oscillator that can drift by a percent or two, tens of minutes a day. So when the date or artwork is on, each wake re-syncs the clock and sleeps until 00:30 local time. If it wakes and the synced clock says it is still the evening before, it sleeps the remainder instead of drawing yesterday's date. If Wi-Fi or NTP fails, it uses its own clock (which keeps running through deep sleep), draws anyway and tries again the next day. Every network step has a timeout, so a dead router costs about 10 seconds awake and a dead internet connection about 15 (Wi-Fi, then up to 10 seconds waiting for NTP). The time zone lookup is cached, so a failed lookup uses the last known offset.
 
-Random artwork is fetched as one JPEG a day over HTTPS, decoded with the JPEG decoder in the ESP32-S3's ROM, cropped to 800x480, dithered on the frame with the same palette, saturation, contrast and Floyd-Steinberg steps as the upload page, and saved as `/art.bin` (not one of the 10 photos). Lorem Picsum and Unsplash only serve progressive JPEGs, which the ROM decoder cannot read, so the image is fetched through the free image proxy [wsrv.nl](https://wsrv.nl), which re-encodes it as a baseline JPEG. If anything fails (no network, a bad key, a JPEG it cannot decode) the frame keeps the picture it has. Decoding and dithering take about 7 seconds at 80 MHz and use the PSRAM for the full frame.
+Artwork is fetched as one JPEG a day over HTTPS, decoded with the JPEG decoder in the ESP32-S3's ROM, scaled and cropped to fill the frame, dithered on the frame with the same palette, saturation, contrast and Floyd-Steinberg steps as the upload page, and saved as `/art.bin` (not one of the 10 photos). If anything fails (no network, a bad key, a JPEG it cannot decode) the frame keeps the picture it has. Decoding and dithering take about 7 seconds at 80 MHz and use the PSRAM for the full frame.
+
+Museum art comes straight from `images.metmuseum.org`. The list of 223 works (from `tools/met.json`, with title, artist and the image's path) is built into the firmware as `firmware/src/met.h`, about 16 KB; `node tools/met.mjs` regenerates it. Each day the frame picks one at random, never the same as the day before. The museum's "web-large" images are about 600 pixels wide (598 to 600, 275 to 499 high, all baseline JPEG), so they are enlarged by up to about 1.6 times (nearest pixel) and cropped to fill 800x430. The title and artist are drawn in the 50-pixel strip below when the picture is shown, so the text is not dithered. A long title is shortened with "...". Some scans include the museum's grey calibration strip along an edge.
+
+Lorem Picsum and Unsplash only serve progressive JPEGs, which the ROM decoder cannot read, so Random photos are fetched through the free image proxy [wsrv.nl](https://wsrv.nl), which re-encodes them as baseline JPEGs.
+
+The Today page is drawn on the frame. The day number is the 24-point font enlarged six times with smoothing. The moon's phase is worked out from the date as days since the new moon of 6 January 2000 in mean synodic months (29.53 days). The real moon runs up to about 14 hours ahead of or behind that mean, so the phase shown is right to within about a day.
 
 ### Photo format
 
@@ -118,9 +146,11 @@ Each photo is a raw file of 128,000 bytes (800 x 480 pixels, three to a byte). E
 
 The photos partition (1,572,864 bytes, 384 blocks of 4 KB) holds 10 photos and the artwork at 32 blocks each, plus the file system's own blocks: 1,449,984 bytes used, measured. An upload is written to a temporary file before it replaces the oldest photo, so the oldest is removed when an upload starts to make room. A rejected upload therefore still removes the oldest photo when 10 are stored.
 
+"Keep" and a pinned date are stored per photo in the settings (key `m<sequence>`: the date as month * 100 + day, plus 0x8000 for Keep) and removed with the photo. The oldest photo that is neither kept nor pinned makes room for an upload. If all 10 are kept or pinned, uploads are refused and the page asks to delete one first. A photo pinned to 29 February shows only in leap years.
+
 ### Tuning colours
 
-The browser does the image work. In `firmware/src/index.html`, `PALETTE` holds the RGB values used to match pixels to the six inks, and `SATURATION` (1.4) and `CONTRAST` (1.15) adjust the photo before Floyd-Steinberg dithering. Change them to suit your panel. The palette order must stay the same as `COLORS` in `main.cpp`.
+The browser does the image work. In `firmware/src/index.html`, `PALETTE` holds the RGB values used to match pixels to the six inks, and `SATURATION` (1.4) and `CONTRAST` (1.15) adjust the photo before Floyd-Steinberg dithering. Poster carries 40% of the error to the neighbouring pixels instead of all of it. Change them to suit your panel. The palette order must stay the same as `COLORS` in `main.cpp`.
 
 To check the dither and packing code without a browser or a board:
 
@@ -128,7 +158,7 @@ To check the dither and packing code without a browser or a board:
 node tools/test_dither.mjs
 ```
 
-It checks that a solid field of each ink dithers to that ink, and that a gradient packs to exactly 128,000 bytes with every byte at most 215. It prints `dither ok` on success.
+It checks that a solid field of each ink dithers to that ink, and that a gradient packs to exactly 128,000 bytes with every byte at most 215. It also checks the looks (Duotone uses only black, white and its ink; Poster changes ink less often than Natural), the choice of Duotone ink, and the text stamping. It prints `dither ok` on success.
 
 ## Power
 
@@ -138,13 +168,20 @@ These figures were measured on the bench with a Nordic PPK2 at 3.8 V on the batt
 | --- | --- |
 | Deep sleep | 22 uA |
 | One photo rotation (a ~30 s colour refresh) | about 0.5 mAh |
-| Upload session, while the page is being served | about 95 mA |
-| Daily wake, Date on, My photos (Wi-Fi, NTP, time zone lookup, refresh) | 0.66 mAh, 38 s awake |
-| Daily wake, Random artwork (also download, decode, dither) | 1.26 mAh, 51 s awake |
+| Upload session, first 30 s after power-on, page idle | about 115 mA (200 mA for the first 5 s after joining Wi-Fi, then about 90 mA) |
+| Daily wake, Date on, My photos (Wi-Fi, NTP, time zone lookup, refresh) | 0.71 to 0.80 mAh, 42 to 52 s awake |
+| Daily wake, Museum art (also download, decode, dither) | 1.05 to 1.72 mAh, 46 to 64 s awake |
+| Daily wake, Today | 0.53 to 0.61 mAh, 43 to 51 s awake |
+| Daily wake with a flat battery (no refresh, no Wi-Fi) | about 0.5 s awake |
+| Daily wake, Random artwork (earlier firmware) | 1.26 mAh, 51 s awake |
 
-For comparison, a radio-off rotation measured 0.42 mAh in the same session as the two rows above. So the date costs about 0.24 mAh a day (about 90 mAh a year) and Random artwork about 0.8 mAh a day (about 300 mAh a year) on top of the plain rotation. Both add one Wi-Fi connection a day, and the frame wakes at the same time each night instead of every 24 hours from the last wake.
+The daily-wake rows were measured with the bench build (the same `daily()` code, waking every minute); each range is three or more wakes. Most of the spread is the NTP request, which lwIP sends after a random 0 to 5 seconds, and for museum art the size of the image (50 to 450 KB). For comparison, a radio-off rotation measured 0.42 mAh. So the date costs about 0.3 mAh a day (about 120 mAh a year) and Museum art about 0.9 mAh a day (about 340 mAh a year) on top of the plain rotation. Both add one Wi-Fi connection a day, and the frame wakes at the same time each night instead of every 24 hours from the last wake.
 
-At 95 mA, the full 3-minute upload window costs about 5 mAh, and a typical quick upload about 2 mAh. A visit to the updater that times out after 5 minutes measured 9.7 mAh (about 98 mA while serving).
+At about 95 mA, the full 3-minute upload window costs about 5 mAh, and a typical quick upload about 2 mAh. Closing the page ends the session at once instead of after 3 idle minutes.
+
+The session draws 200 mA for its first 5 seconds or so after joining Wi-Fi because the radio does not enter modem sleep yet (the trace has no beacon gaps). Without mDNS it measured the same, so mDNS is not the cause. After that, the floor is about 84 mA with a short burst at every beacon (about every 100 ms): the radio sleeps between beacons, but the CPU never does.
+
+Joining the access point of the last wake directly (cached channel and BSSID) was measured and not kept: joining took 2.3 s either way (the stored network already carries its channel), and the charge per wake was the same. A visit to the updater that times out after 5 minutes measured 9.7 mAh (about 98 mA while serving).
 
 Estimate for one year, using the figures above:
 
@@ -154,8 +191,8 @@ Estimate for one year, using the figures above:
 | One rotation per day | ~180 mAh |
 | One upload session per week | ~260 mAh |
 | Total | ~630 mAh |
-| Total with Date on | ~720 mAh |
-| Total with Random artwork | ~930 mAh |
+| Total with Date on | ~730 mAh |
+| Total with Museum art | ~940 mAh |
 
 LiPo self-discharge (not measured, typically a few percent a month) comes on top. A 2000 mAh cell should comfortably pass a year. This is an estimate from bench measurements, not a year-long test.
 
@@ -168,14 +205,18 @@ One non-obvious finding: the panel's control lines must be held low whenever the
 - Firmware updates over Wi-Fi replace only the frame app. The first install, the updater, the boot loader and the partition table need USB. So does recovery if the updater itself is broken.
 - `frame.local` needs mDNS: iPhone, Mac, Windows 10 and later, Android 12 and later. The setup-complete screen also shows the frame's IP address as a fallback.
 - Landscape only. Photos are centre-cropped to 800x480.
-- The frame stops rotating when the battery is below 3.4 V, to avoid a half-drawn refresh on a flat cell.
-- Random artwork depends on three free outside services: Lorem Picsum (or Unsplash with a key), and wsrv.nl to convert the JPEG. Lorem Picsum photos are random Unsplash photos of any subject, not only landscapes. If a service changes or goes away, the frame keeps showing the last picture.
+- Below 3.4 V the frame shows "Please plug me in" and stops changing the picture until it has been charged above 3.9 V.
+- Museum art depends on `images.metmuseum.org` serving the same image paths. Random photos depend on three free outside services: Lorem Picsum (or Unsplash with a key), and wsrv.nl to convert the JPEG. Lorem Picsum photos are random Unsplash photos of any subject, not only landscapes. If a service changes or goes away, the frame keeps showing the last picture.
+- Museum images are about 600 pixels wide, so museum art is enlarged and a little soft, and cropped to the frame's shape: up to about a third of a tall picture is cut off.
+- A pinned photo needs the clock, so pinning one makes the frame join Wi-Fi once a day.
+- Photos are uploaded as finished frame images, so a look or caption cannot be changed afterwards: upload the photo again.
 - The HTTPS connections for artwork do not check certificates (a CA bundle would not fit comfortably in flash). The pictures are public, but the optional Unsplash key is sent over such a connection, so someone able to intercept the frame's traffic could read it. Use a free key you do not mind losing. The key is also visible to anyone who opens the upload page.
 - The date and time zone lookups need the internet; with no internet the frame uses its own clock, which loses the time after a power loss (no date is drawn until it has synced again).
 
 ## Credits
 
 - [GxEPD2](https://github.com/ZinggJM/GxEPD2) by Jean-Marc Zingg, the panel driver.
+- Museum art: public-domain images from [The Metropolitan Museum of Art](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) (Open Access, CC0).
 - Espressif's Wi-Fi provisioning (the ESP-IDF provisioning library and the "ESP BLE Provisioning" app).
 
 ## License
