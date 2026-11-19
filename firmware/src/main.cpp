@@ -192,6 +192,7 @@ template <class F> void paint(F draw) {
   do draw(display); while (display.nextPage());
   display.hibernate();
   panelOff();
+  prefs.putUChar("flat", 0);  // a picture has replaced the "plug me in" screen
 }
 
 void drawBattery(Adafruit_GFX &g) {  // top right: an almost empty battery
@@ -273,7 +274,59 @@ bool showFile(const String &path) {
     drawDate(g);
     drawBattery(g);
   });
-  prefs.putUChar("flat", 0);  // a picture has replaced the "plug me in" screen
+  return true;
+}
+
+// The "Today" page: day number, weekday, month and year, and the moon's phase.
+void drawToday(Adafruit_GFX &g, time_t t) {
+  tm d;
+  gmtime_r(&t, &d);
+  char s[24];
+  int16_t x1, y1;
+  uint16_t w, h;
+  g.fillScreen(GxEPD_WHITE);
+  g.setTextColor(GxEPD_RED);
+  g.setFont(&FreeSansBold24pt7b);
+  g.setTextSize(6);
+  snprintf(s, sizeof s, "%d", d.tm_mday);
+  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+  g.setCursor(230 - w / 2 - x1, 300);
+  g.print(s);
+  g.setTextSize(1);
+  g.setTextColor(GxEPD_BLACK);
+  strftime(s, sizeof s, "%A", &d);
+  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+  g.setCursor(230 - w / 2 - x1, 380);
+  g.print(s);
+  g.setFont(&FreeSansBold18pt7b);
+  strftime(s, sizeof s, "%B %Y", &d);
+  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+  g.setCursor(230 - w / 2 - x1, 430);
+  g.print(s);
+  // Moon: days since the new moon of 6 Jan 2000 18:14 UTC, in mean synodic months. The real moon runs
+  // up to about 14 hours ahead of or behind this mean, so the phase is right to within about a day.
+  float p = fmodf((t / 86400.0 - 10962.76) / 29.530589, 1);
+  const int cx = 600, cy = 200, r = 110;
+  g.fillCircle(cx, cy, r, GxEPD_BLACK);
+  for (int y = -r; y <= r; y++) {  // the lit part, as seen from the northern hemisphere
+    float hw = sqrtf(r * r - y * y), edge = hw * cosf(2 * PI * p);
+    int a = p < 0.5f ? edge : -hw, b = p < 0.5f ? hw : -edge;
+    if (b > a) g.drawFastHLine(cx + a, cy + y, b - a, GxEPD_WHITE);
+  }
+  g.drawCircle(cx, cy, r, GxEPD_BLACK);
+  g.drawCircle(cx, cy, r + 1, GxEPD_BLACK);
+  static const char *const names[] = {"New moon", "Waxing crescent", "First quarter", "Waxing gibbous",
+                                      "Full moon", "Waning gibbous", "Last quarter", "Waning crescent"};
+  g.setFont(&FreeSans12pt7b);
+  g.getTextBounds(names[int(p * 8 + 0.5f) % 8], 0, 0, &x1, &y1, &w, &h);
+  g.setCursor(cx - w / 2 - x1, cy + r + 50);
+  g.print(names[int(p * 8 + 0.5f) % 8]);
+  drawBattery(g);
+}
+
+bool showToday() {
+  if (!clockSet()) return false;  // keep the picture until the clock has been set
+  paint([](Adafruit_GFX &g) { drawToday(g, localNow()); });
   return true;
 }
 
@@ -557,11 +610,13 @@ void daily() {
 #if ROTATE_SECONDS == 86400
   if (clockSet() && localNow() % 86400 >= 43200) return;  // woke before midnight: sleepNow() sleeps the rest
 #endif
-  bool art = prefs.getUChar("show", 0), fresh = art && synced && fetchArt(deadline);
+  int show = prefs.getUChar("show", 0);  // 0 my photos, 1 artwork, 2 today
+  bool art = show == 1, fresh = art && synced && fetchArt(deadline);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  if (!art) rotate();
+  if (show == 2) showToday();
+  else if (!art) rotate();
   else if (fresh || prefs.getUChar("date", 0)) showFile("/art.bin");  // failed fetch: keep the picture, new date
 }
 
@@ -702,7 +757,7 @@ void session(bool resetWifi) {
     String key;
     for (char c : server.arg("key"))
       if (isalnum(c) || c == '-' || c == '_') key += c;  // it goes into a URL and into JSON
-    prefs.putUChar("show", server.arg("show") == "1");
+    prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 2));
     prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 3));
     prefs.putInt("tz", server.arg("tz") == "auto" ? AUTO_TZ : constrain(server.arg("tz").toInt(), -720, 840));
     prefs.putString("key", key.substring(0, 80));
@@ -723,6 +778,7 @@ void session(bool resetWifi) {
     uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     lowBattery = server.hasArg("low");
     if (server.arg("w") == "flat") paint(drawFlat);
+    else if (server.arg("w") == "today") paint([](Adafruit_GFX &g) { drawToday(g, server.arg("t").toInt()); });
     else showFile(photoPath(server.arg("seq").toInt()));
     for (int i = 0; i < W * H; i++) {
       int k = 1;
@@ -792,13 +848,14 @@ void session(bool resetWifi) {
   }
   server.stop();
   if (online()) Serial.printf("synced %d\n", syncClock());
-  bool art = prefs.getUChar("show", 0) && changed && !showSeq;
+  bool art = prefs.getUChar("show", 0) == 1 && changed && !showSeq;
   if (art) fetchArt(millis() + 30000);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
   if (showSeq) showPhoto(showSeq);
   else if (art) showFile("/art.bin");
+  else if (changed && prefs.getUChar("show", 0) == 2) showToday();
   else if (changed) showPhoto(prefs.getUInt("cur", 0));  // redraw with the new date setting
 }
 
