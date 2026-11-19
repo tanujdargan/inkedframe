@@ -32,6 +32,7 @@
 #include <esp_wifi.h>
 #include <qrcode.h>
 #include <rom/tjpgd.h>  // the JPEG decoder in the chip's ROM: costs no flash
+#include "met.h"
 
 #ifndef ROTATE_SECONDS
 #define ROTATE_SECONDS 86400  // how often the stored photos rotate
@@ -52,6 +53,7 @@ const uint16_t WARN_BATTERY_MV = 3550, LOW_BATTERY_MV = 3400, CHARGED_MV = 3900;
 const uint32_t WIFI_TIMEOUT_MS = 20000;
 const int AUTO_TZ = 9999;              // "tz" setting: minutes east of UTC, or this for "look it up"
 const size_t MAX_JPEG = 600 * 1024;
+const int LABEL_H = 50;  // the strip under museum art with its title and artist
 const char *FS_ROOT = "/littlefs";
 
 GxEPD2_7C<GxEPD2_730c_GDEP073E01, GxEPD2_730c_GDEP073E01::HEIGHT / 4>
@@ -205,7 +207,7 @@ void drawBattery(Adafruit_GFX &g) {  // top right: an almost empty battery
 }
 
 // Today's date in black on white, so it reads over any picture.
-void drawDate(Adafruit_GFX &display) {
+void drawDate(Adafruit_GFX &display, int H) {  // H: the bottom of the picture
   int mode = prefs.getUChar("date", 0);
   time_t t = localNow();
   if (!mode || !clockSet()) return;
@@ -257,6 +259,24 @@ void drawDate(Adafruit_GFX &display) {
   logged = true;
 }
 
+// Museum art: "title, artist" in a white strip along the bottom.
+void drawLabel(Adafruit_GFX &g) {
+  String l = prefs.getString("label"), t = l.substring(0, l.indexOf('|')), a = l.substring(l.indexOf('|') + 1);
+  if (a.length()) a = ", " + a;
+  int16_t x1, y1;
+  uint16_t tw, aw, h;
+  g.fillRect(0, H - LABEL_H, W, LABEL_H, GxEPD_WHITE);
+  g.setTextColor(GxEPD_BLACK);
+  g.setFont(&FreeSans12pt7b);
+  g.getTextBounds(a, 0, 0, &x1, &y1, &aw, &h);
+  g.setFont(&FreeSansBold12pt7b);
+  while (g.getTextBounds(t, 0, 0, &x1, &y1, &tw, &h), tw + aw > W - 40 && t.length() > 8) t = t.substring(0, t.length() - 4) + "...";
+  g.setCursor((W - tw - aw) / 2 - x1, H - 18);
+  g.print(t);
+  g.setFont(&FreeSans12pt7b);
+  g.print(a);
+}
+
 bool showFile(const String &path) {
   File f = LittleFS.open(path);
   if (!f || f.size() != PHOTO_BYTES) return false;
@@ -271,7 +291,9 @@ bool showFile(const String &path) {
         g.drawPixel(i % W, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
       }
     }
-    drawDate(g);
+    bool label = path == "/art.bin" && prefs.getString("label").length();
+    if (label) drawLabel(g);
+    drawDate(g, label ? H - LABEL_H : H);
     drawBattery(g);
   });
   return true;
@@ -472,7 +494,7 @@ struct Jpeg {
   const uint8_t *data;
   size_t len, pos;
   uint8_t *rgb;  // W x H x 3
-  int cw, ch, ox, oy;  // the part of the (scaled) picture that fills the frame
+  int cw, ch, ox, oy, h;  // the part of the (scaled) picture that fills the top h rows of the frame
 };
 
 UINT jpegIn(JDEC *jd, BYTE *buf, UINT n) {
@@ -483,15 +505,20 @@ UINT jpegIn(JDEC *jd, BYTE *buf, UINT n) {
   return n;
 }
 
-// The picture is at least frame size, so every frame pixel gets the nearest source pixel.
+// Each frame pixel takes the nearest source pixel: works for enlarging (museum images are 600 wide)
+// and shrinking. Only the frame pixels whose source lies in this decoded block are visited.
 UINT jpegOut(JDEC *jd, void *bitmap, JRECT *r) {
   Jpeg &j = *(Jpeg *)jd->device;
   const uint8_t *p = (const uint8_t *)bitmap;
-  for (int y = r->top; y <= r->bottom; y++)
-    for (int x = r->left; x <= r->right; x++, p += 3) {
-      int dx = (x - j.ox) * W / j.cw, dy = (y - j.oy) * H / j.ch;
-      if (x >= j.ox && y >= j.oy && dx < W && dy < H) memcpy(j.rgb + (dy * W + dx) * 3, p, 3);
+  for (int dy = std::max(0, ((r->top - j.oy) * j.h + j.ch - 1) / j.ch); dy < j.h; dy++) {
+    int sy = j.oy + dy * j.ch / j.h;
+    if (sy > r->bottom) break;
+    for (int dx = std::max(0, ((r->left - j.ox) * W + j.cw - 1) / j.cw); dx < W; dx++) {
+      int sx = j.ox + dx * j.cw / W;
+      if (sx > r->right) break;
+      if (sy >= r->top && sx >= r->left) memcpy(j.rgb + (dy * W + dx) * 3, p + ((sy - r->top) * (r->right - r->left + 1) + sx - r->left) * 3, 3);
     }
+  }
   return 1;
 }
 
@@ -553,8 +580,18 @@ bool fetchArt(uint32_t deadline) {
   http.useHTTP10(true);  // no chunked replies: the body is just the bytes
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   String src = "picsum.photos/800/480.jpg?random=" + String((uint32_t)(time(nullptr) / ROTATE_SECONDS));
-  String key = prefs.getString("key");
-  if (key.length()) {
+  String key = prefs.getString("key"), url, label;
+  if (!prefs.getUChar("src", 0)) {  // museum art: a different work from the list each day
+    int prev = prefs.getUShort("met", 0), i = esp_random() % (MET_COUNT - 1);
+    i += i >= prev;
+    const char *p = MET;
+    for (int k = 0; k < i; k++) p = strchr(p, '\n') + 1;
+    String line(p, strchr(p, '\n') - p);
+    int bar = line.indexOf('|');
+    url = "https://images.metmuseum.org/CRDImages/" + line.substring(0, 2) + "/web-large" + line.substring(2, bar);
+    label = line.substring(bar + 1);
+    prefs.putUShort("met", i);
+  } else if (key.length()) {
     String json = http.begin(tls, "https://api.unsplash.com/photos/random?query=landscape&orientation=landscape&client_id=" + key) &&
                   http.GET() == 200 ? http.getString() : "";
     http.end();
@@ -568,12 +605,14 @@ bool fetchArt(uint32_t deadline) {
     src += "&w=800&h=480&fit=crop&fm=jpg&q=80";
   }
   // picsum and Unsplash only send progressive JPEGs, which the ROM decoder cannot read: wsrv.nl, a free
-  // image proxy, re-encodes them as baseline.
-  String url = "https://wsrv.nl/?output=jpg&q=85&url=";
-  for (char c : src) {
-    char e[4];
-    snprintf(e, sizeof e, "%%%02X", (uint8_t)c);
-    url += isalnum(c) || strchr("-._~/:", c) ? String(c) : String(e);
+  // image proxy, re-encodes them as baseline. The museum's images are baseline already.
+  if (!url.length()) {
+    url = "https://wsrv.nl/?output=jpg&q=85&url=";
+    for (char c : src) {
+      char e[4];
+      snprintf(e, sizeof e, "%%%02X", (uint8_t)c);
+      url += isalnum(c) || strchr("-._~/:", c) ? String(c) : String(e);
+    }
   }
   int code = http.begin(tls, url) ? http.GET() : -1, len = http.getSize();
   size_t got = 0, cap = len > 0 ? len : MAX_JPEG;
@@ -585,23 +624,25 @@ bool fetchArt(uint32_t deadline) {
     else delay(5);
   }
   http.end();
-  Serial.printf("art: http %d, %u of %d bytes in %lu ms, heap %u, psram found %d free %u\n", code, got, len,
+  Serial.printf("art: %s\nart: http %d, %u of %d bytes in %lu ms, heap %u, psram found %d free %u\n", url.c_str(), code, got, len,
                 millis() - t0, ESP.getFreeHeap(), psramFound(), ESP.getFreePsram());
   bool ok = jpg && (len > 0 ? got == (size_t)len : got < cap);
   JDEC jd;
   Jpeg j = {jpg, got, 0, nullptr};
   void *work = malloc(4096);
   JRESULT r = ok && work ? jd_prepare(&jd, jpegIn, work, 4096, &j) : JDR_PAR;
-  ok = r == JDR_OK && jd.width >= W && jd.height >= H;  // progressive JPEGs fail here (JDR_FMT3)
+  ok = r == JDR_OK;  // progressive JPEGs fail here (JDR_FMT3)
   if (ok) {
+    j.h = label.length() ? H - LABEL_H : H;
     int scale = 0;  // the decoder can shrink by 1/2, 1/4, 1/8 while staying at least frame size
-    while (scale < 3 && (jd.width >> (scale + 1)) >= W && (jd.height >> (scale + 1)) >= H) scale++;
+    while (scale < 3 && (jd.width >> (scale + 1)) >= W && (jd.height >> (scale + 1)) >= j.h) scale++;
     int sw = jd.width >> scale, sh = jd.height >> scale;
-    j.cw = std::min(sw, sh * W / H);
-    j.ch = j.cw * H / W;
+    j.cw = std::min(sw, sh * W / j.h);
+    j.ch = j.cw * j.h / W;
     j.ox = (sw - j.cw) / 2;
     j.oy = (sh - j.ch) * 45 / 100;  // same crop as the upload page
     j.rgb = (uint8_t *)ps_malloc(W * H * 3);
+    if (j.rgb) memset(j.rgb, 255, W * H * 3);  // white under the label
     r = j.rgb ? jd_decomp(&jd, jpegOut, scale) : JDR_MEM1;
     ok = r == JDR_OK;
   }
@@ -609,6 +650,7 @@ bool fetchArt(uint32_t deadline) {
   free(work);
   free(jpg);
   ok = ok && ditherToFile(j.rgb, "/art.bin");
+  if (ok) prefs.putString("label", label);
   free(j.rgb);
   Serial.printf("art: %s at %lu ms\n", ok ? "saved" : "failed, keeping the current picture", millis() - t0);
   return ok;
@@ -765,9 +807,9 @@ void session(bool resetWifi) {
     int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ), n = listPhotos(seqs);  // SOC: the high byte is whole percent
     char json[600];
     int len = snprintf(json, sizeof json,
-             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
+             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
              n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
-             prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
+             prefs.getUChar("src", 0), prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
     for (int i = n - 1; i >= 0; i--) len += snprintf(json + len, sizeof json - len, "[%u,%u]%s", seqs[i], meta(seqs[i]), i ? "," : "]}");
     if (!n) strcat(json, "]}");
     server.send(200, "application/json", json);
@@ -777,6 +819,7 @@ void session(bool resetWifi) {
     for (char c : server.arg("key"))
       if (isalnum(c) || c == '-' || c == '_') key += c;  // it goes into a URL and into JSON
     prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 2));
+    prefs.putUChar("src", server.arg("src") == "1");  // 0 museum art, 1 random photos
     prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 3));
     prefs.putInt("tz", server.arg("tz") == "auto" ? AUTO_TZ : constrain(server.arg("tz").toInt(), -720, 840));
     prefs.putString("key", key.substring(0, 80));
@@ -797,6 +840,7 @@ void session(bool resetWifi) {
     uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     lowBattery = server.hasArg("low");
     if (server.arg("w") == "flat") paint(drawFlat);
+    else if (server.arg("w") == "art") showFile("/art.bin");
     else if (server.arg("w") == "today") paint([](Adafruit_GFX &g) { drawToday(g, server.arg("t").toInt()); });
     else showFile(photoPath(server.arg("seq").toInt()));
     for (int i = 0; i < W * H; i++) {

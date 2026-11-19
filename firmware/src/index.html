@@ -48,11 +48,13 @@
   <h2>Settings</h2>
   <label for="show">Show</label>
   <select id="show" name="show"><option value="0">My photos</option><option value="1">Artwork</option><option value="2">Today</option></select>
+  <label for="src">Artwork</label>
+  <select id="src" name="src"><option value="0">Museum art</option><option value="1">Random photos</option></select>
   <label for="date">Date on the picture</label>
   <select id="date" name="date"><option value="0">Off</option><option value="1">Corner</option><option value="2">Banner</option><option value="3">Big</option></select>
   <label for="tz">Time zone</label>
   <select id="tz" name="tz"><option value="auto">Automatic</option></select>
-  <label for="key">Unsplash access key (optional, for Random artwork)</label>
+  <label for="key">Unsplash access key (optional, for Random photos)</label>
   <input id="key" name="key" autocomplete="off" autocapitalize="off" spellcheck="false">
   <button class="btn">Save</button>
   <p id="saved" role="status" aria-live="polite"></p>
@@ -280,7 +282,7 @@ fetch('/status').then(r => r.json()).then(s => {
   document.getElementById('info').textContent =
     `${s.photos} of ${s.max} photos stored` + (s.battery_pct >= 0 ? ` · Battery ${Math.min(100, s.battery_pct)}%` : '');
   document.getElementById('ver').textContent = s.version;
-  form.show.value = s.show; form.date.value = s.date; form.tz.value = s.tz; form.key.value = s.key;
+  form.show.value = s.show; form.src.value = s.src; form.date.value = s.date; form.tz.value = s.tz; form.key.value = s.key;
 }).catch(() => {});
 </script>
 </html>
