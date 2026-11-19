@@ -6,34 +6,38 @@ inkedframe is an open-source battery photo frame, designed to be built and given
 
 ## How it is used
 
-The person receiving the frame does a one-time setup. The frame draws a QR code and instructions on its own screen. They install Espressif's free "ESP BLE Provisioning" app (iOS and Android), scan the code and pick their Wi-Fi network. Bluetooth is used only for this step.
+The person receiving the frame does a one-time setup, with no app. The frame creates its own Wi-Fi network, "Photo Frame", and draws a QR code and short instructions on its screen. They point the phone's camera at the code and tap Join. The phone joins the frame's network and opens a setup page by itself (the frame answers every web address, so phones treat it as a sign-in page). On that page they choose their home Wi-Fi from a list, type its password and tap Connect. The frame joins the home network and its screen changes to "Connected", with the address to open for adding photos. Without a camera, they can join the "Photo Frame" network by hand with the password printed under the code (it is different for each frame).
 
-To add photos, they press the button on the frame, then open `http://frame.local` on a phone or laptop on the same Wi-Fi, and choose one or more photos. Once uploads stop for a few seconds, or the page is closed, the frame shows the newest photo and sleeps. After that it changes photo by itself once a day, cycling through the stored ones. When there are already 10 photos, a new upload removes the oldest one that is not kept or pinned.
+Setup stays open for 10 minutes; if nobody finishes it, the frame keeps its picture and sleeps until the button is pressed. If the home network cannot be joined within 20 seconds (usually a wrong password), the page says so and the frame forgets that network, so it can be tried again.
 
-Before choosing photos, the page offers:
+To add photos, they press the button on the frame, then open `http://frame.local` on a phone or laptop on the same Wi-Fi. The page is mostly one large "Choose photos" button. After choosing one or more photos, they see the first one as the frame will show it (dithered, in a drawn frame), and then press "Send to the frame". The page says "Sending 1 of 3" while it works, then "Sent. The frame is changing, about half a minute." A few seconds after the last upload (or when the page is closed) the frame shows the newest photo and sleeps. After that it changes photo by itself once a day, cycling through the stored ones. When there are already 10 photos, each upload removes the oldest one that is not kept or pinned.
 
-- **Look**: Natural (default), Poster (flatter areas of colour) or Duotone (black, white and one ink: the one closest to the photo's main colour, or red, blue, yellow or green). The phone remembers the choice.
-- **Show on a date** (collapsed): a month and day. The photo is then shown on that day every year, instead of the usual picture, and is not part of the daily rotation. An optional greeting is printed in red in a white band across the top.
+Between choosing and sending, the page offers:
+
+- **Look**: Natural (default), Poster (flatter areas of colour) or Duotone (black, white and one ink: the one closest to each photo's main colour, or red, blue, yellow or green). Each choice shows the chosen photo drawn that way. The phone remembers the choice.
+- **Show on a date every year** (collapsed): a month and day. The photo is then shown on that day every year, instead of the usual picture, and is not part of the daily rotation. An optional greeting is printed in red in a white band across the top. The frame keeps its current picture until that day.
 - **Add a caption** (collapsed): a message and a "from" line, printed in black in the same band.
 
-The browser draws the band and its text after dithering, so the letters stay sharp.
+The look, date and caption apply to all the photos chosen together. The browser draws the band and its text after dithering, so the letters stay sharp. If the frame has gone to sleep, the page says "Press the button on the frame" with a Try again button; the chosen photos stay on the page, and Try again carries on from the photo that was not sent yet.
 
-The upload page also has a small settings form (saved on the frame, kept across power loss):
+The gear button (or "Frame settings") opens the settings (saved on the frame, kept across power loss):
 
 - **Show**: "My photos" (default), "Artwork" (a new picture every day instead of the stored photos) or "Today" (a calendar page: the day number in red, the weekday, month and year, and the moon's phase).
 - **Artwork**: "Museum art" (default: one of 223 public-domain paintings and prints from the Metropolitan Museum of Art, with its title and artist in a strip along the bottom) or "Random photos" (a random landscape-format photograph from Lorem Picsum).
 - **Date**: Off (default), Corner (a short date such as "Thu 19 Nov" in the bottom right corner), Banner (a white strip along the bottom with the weekday and full date) or Big (a large day number with the month and weekday, bottom left). The date is black on a white box so it can be read over any picture.
 - **Time zone**: Automatic (default: looked up from the frame's internet address each day) or a fixed UTC offset.
-- **Unsplash access key** (optional): with a free key from unsplash.com/developers, Random photos asks Unsplash for a landscape photo instead of using Lorem Picsum.
+- **Unsplash access key** (optional, shown when Artwork is set to Random photos): with a free key from unsplash.com/developers, Random photos asks Unsplash for a landscape photo instead of using Lorem Picsum. The key is hidden as dots; the eye button next to it shows it for checking or editing.
 
-After Save, the frame redraws about a minute later with the new settings. The page also shows the battery charge in percent. A collapsed "Photos on the frame" section lists the stored photos as small pictures, each with "Show now" (shown when the page is closed), "Delete" and "Keep" (a kept photo is never removed to make room). A collapsed "Advanced" section at the bottom shows the firmware version and has the "Update firmware" button (see [Firmware updates](#firmware-updates)).
+The date and time are always set automatically over the internet; there is nothing to enter. After Save, the frame redraws about 5 seconds later with the new settings and sleeps, and the page says so: "The frame is updating now, about half a minute. Press its button again to change more." At the bottom of the settings, "Advanced" shows the firmware version and has the "Update firmware" button (see [Firmware updates](#firmware-updates)).
+
+The page also shows how many photos are stored and the battery charge in percent. "Photos on the frame" shows the stored photos as small pictures, loaded one at a time. Tapping one offers "Show this now" (shown when the page is closed), "Keep on the frame" (a kept photo is never removed to make room) and "Delete from the frame". "Select" lets several be ticked and removed together with "Delete (n)". Photos pinned to a date show that date instead of Keep.
 
 Closing the page (or leaving it) tells the frame to finish at once, unless photos are still being sent or the photo picker is open. Reloading the page within 2 seconds cancels that. If the frame has already gone to sleep, the page says to press the button.
 
 The button does two things:
 
 - Press it: wake the frame and open the upload page for a few minutes.
-- Hold it for 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and restart Bluetooth setup (for a new router or a new home). When held at wake, the 5 seconds count from the moment the frame wakes.
+- Hold it for 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and start the Wi-Fi setup again, with the "Photo Frame" network and the QR code (for a new router or a new home). When held at wake, the 5 seconds count from the moment the frame wakes.
 
 ## Parts and wiring
 
@@ -76,7 +80,7 @@ pio run -e dev -t upload
 
 Two warnings:
 
-- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app, a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Bluetooth setup screen again.
+- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app (the current build is 1,119,821 bytes, 63% of it, with the upload page about 49 KB of that), a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Wi-Fi setup screen again.
 - Every USB upload resets `otadata` to start the frame app. If you flash the updater while the frame app slot holds a broken image, flash the frame app afterwards.
 - On this board, two resets in quick succession enter the UF2 bootloader. If the board stops running your firmware after a double tap of reset, that is why.
 
@@ -89,11 +93,11 @@ Everything happens in `setup()`, then the chip goes back to deep sleep. What hap
 | Timer (every 24 hours), Date off, My photos, nothing pinned | Shows the next older stored photo that is not pinned, wrapping to the newest. Radio stays off. Does nothing with fewer than 2 photos. |
 | Timer (00:30 local time), Date on, Artwork, Today or a pinned photo | Joins Wi-Fi, sets the clock by NTP (`pool.ntp.org`) and, for Automatic time zone, looks up the UTC offset at `http://ip-api.com`. Then shows the photo pinned to today if there is one, otherwise fetches the day's artwork, draws the Today page or steps to the next photo, with the date. |
 | Timer, battery low | See [Low battery](#low-battery). |
-| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (30 seconds after a settings change), stores uploads and settings, and shows the newest photo (or the one picked with "Show now") 4 seconds after the last upload or 2 seconds after the page was closed. |
-| Button held 5 seconds | Forgets the stored Wi-Fi and runs Bluetooth setup again. |
-| No Wi-Fi stored | Runs Bluetooth setup and draws the QR code on the panel. Setup stays open for 10 minutes. |
+| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (5 seconds after a settings change), stores uploads and settings, and shows the newest photo (or the one picked with "Show now") 4 seconds after the last upload or 2 seconds after the page was closed. |
+| Button held 5 seconds | Forgets the stored Wi-Fi and runs Wi-Fi setup again. |
+| No Wi-Fi stored | Runs Wi-Fi setup: starts its own network "Photo Frame" (WPA2, with a password worked out from the chip's MAC address), answers every DNS name with its own address so the phone opens the setup form, and draws the QR code (network name and password) on the panel. Setup stays open for 10 minutes. |
 
-If Wi-Fi does not connect within 20 seconds the frame gives up and keeps the current picture. A wrong password makes it forget the network and offer setup again.
+If Wi-Fi does not connect within 20 seconds the frame gives up and keeps the current picture. During setup, a network that cannot be joined within 20 seconds (a wrong password) is forgotten at once and the form says so, so it can be tried again while setup is open. Once the home network is joined, the form shows "Connected" for a few seconds before the frame's own network closes.
 
 ### Firmware updates
 
@@ -203,7 +207,8 @@ One non-obvious finding: the panel's control lines must be held low whenever the
 - Photos can only be added from the same Wi-Fi network as the frame, and only after pressing its button.
 - 2.4 GHz Wi-Fi only.
 - Firmware updates over Wi-Fi replace only the frame app. The first install, the updater, the boot loader and the partition table need USB. So does recovery if the updater itself is broken.
-- `frame.local` needs mDNS: iPhone, Mac, Windows 10 and later, Android 12 and later. The setup-complete screen also shows the frame's IP address as a fallback.
+- `frame.local` needs mDNS: iPhone, Mac, Windows 10 and later, Android 12 and later. The "Connected" screen also shows the frame's IP address as a fallback.
+- The upload page needs a browser from 2022 or later (Safari 15.4 on iPhone): it uses the HTML dialog element for its sheets.
 - Landscape only. Photos are centre-cropped to 800x480.
 - Below 3.4 V the frame shows "Please plug me in" and stops changing the picture until it has been charged above 3.9 V.
 - Museum art depends on `images.metmuseum.org` serving the same image paths. Random photos depend on three free outside services: Lorem Picsum (or Unsplash with a key), and wsrv.nl to convert the JPEG. Lorem Picsum photos are random Unsplash photos of any subject, not only landscapes. If a service changes or goes away, the frame keeps showing the last picture.
@@ -217,7 +222,6 @@ One non-obvious finding: the panel's control lines must be held low whenever the
 
 - [GxEPD2](https://github.com/ZinggJM/GxEPD2) by Jean-Marc Zingg, the panel driver.
 - Museum art: public-domain images from [The Metropolitan Museum of Art](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) (Open Access, CC0).
-- Espressif's Wi-Fi provisioning (the ESP-IDF provisioning library and the "ESP BLE Provisioning" app).
 
 ## License
 

@@ -2,93 +2,293 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Photo frame</title>
 <style>
-  body { font: 18px system-ui, sans-serif; margin: 0 auto; padding: 24px 16px; max-width: 520px; text-align: center; color: #222; background: #faf8f4; }
-  h1 { font-size: 26px; margin: 8px 0 24px; }
-  .btn { display: block; padding: 20px; border-radius: 14px; background: #222; color: #fff; font-size: 20px; cursor: pointer; }
-  .btn:focus-within { outline: 3px solid #2157ba; outline-offset: 3px; }
-  fieldset { border: 0; padding: 0; margin: 0 0 20px; text-align: left; font-size: 16px; color: #555; }
-  legend { padding: 0; margin-bottom: 6px; }
-  #look > label { display: inline-block; margin: 0 14px 10px 0; color: #222; font-size: 18px; }
-  #look #inkrow { display: none; width: 100%; margin: 0; color: #555; font-size: 16px; }
-  #look:has([value=duotone]:checked) #inkrow { display: block; }
-  #pinbox, #capbox { margin: 0 0 20px; }
-  #pinbox label, #capbox label { display: block; margin-top: 10px; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .hint { margin: 4px 0; }
-  #pick { position: absolute; opacity: 0; width: 1px; height: 1px; }
-  canvas { width: 100%; height: auto; border-radius: 8px; margin-top: 20px; display: none; }
-  #msg { min-height: 1.5em; margin: 20px 0 0; }
-  #info { color: #777; font-size: 14px; margin-top: 28px; }
-  form { text-align: left; margin-top: 36px; }
-  h2 { font-size: 20px; margin: 0 0 8px; }
-  form label { display: block; margin-top: 14px; font-size: 16px; color: #555; }
-  select, input:not([type]) { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 18px; color: #222; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
-  button.btn { width: 100%; margin-top: 20px; border: 0; font: inherit; font-size: 20px; }
-  #saved { min-height: 1.5em; margin: 12px 0 0; text-align: center; }
-  details { text-align: left; margin-top: 36px; color: #555; font-size: 16px; }
-  summary { cursor: pointer; padding: 6px 0; }
-  .ph { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; align-items: center; margin-top: 16px; }
-  .ph canvas { display: block; margin: 0; grid-row: span 3; }
-  .ph button { font: inherit; font-size: 16px; padding: 10px; border-radius: 10px; border: 1px solid #bbb; background: #fff; color: #222; }
-  .ph label { grid-column: 2; }
-  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; vertical-align: middle; }
+:root {
+  --bg: #f4efe6; --surface: #fffcf7; --surface2: #ece5d8; --surface3: #e2d9c8;
+  --ink: #29241e; --muted: #645b50; --line: #d9cfbf;
+  --accent: #a3452a; --primary: #2b2620; --primary-ink: #fffcf7;
+  --ok: #2c6a43; --ok-soft: #e1eee3; --danger: #a12f28; --danger-soft: #f6e0dc; --warn-soft: #f7ecd3;
+  --focus: #2157ba; --wood: #6b4a33; --mat: #f7f5f0;
+  --shadow: 0 1px 2px rgba(60,40,20,.07), 0 6px 20px rgba(60,40,20,.08);
+  --serif: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #181613; --surface: #23201c; --surface2: #2f2b26; --surface3: #3a352f;
+  --ink: #f3ede3; --muted: #b9ae9f; --line: #3f3932;
+  --accent: #e59a74; --primary: #f3ede3; --primary-ink: #1c1915;
+  --ok: #8fc9a0; --ok-soft: #1f3326; --danger: #f19185; --danger-soft: #3e2320; --warn-soft: #3a2f1a;
+  --focus: #9db8ff; --wood: #4e3626; --mat: #ecebe6;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.3);
+} }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.4 var(--sans); }
+body:has(dialog[open]) { overflow: hidden; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+h1, h2 { font-family: var(--serif); font-weight: 600; margin: 0; }
+h1 { font-size: 30px; line-height: 1.15; }
+h2 { font-size: 24px; line-height: 1.2; }
+h2:focus { outline: none; }
+svg { flex: none; }
+.screen { max-width: 560px; margin: 0 auto; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.pad { padding: 8px 20px 24px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 60px; }
+.stat { color: var(--muted); font-size: 15px; margin: 0; min-height: 21px; }
+.hint { color: var(--muted); font-size: 15px; margin: 6px 0 0; }
+.btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 54px; padding: 0 18px; border-radius: 14px; border: 0;
+  font: 600 18px/1.2 var(--sans); cursor: pointer; color: var(--ink); background: var(--surface2); text-align: center; }
+.btn.primary { background: var(--primary); color: var(--primary-ink); }
+.btn.line { background: var(--surface); border: 1.5px solid var(--line); }
+.btn.danger { background: var(--danger); color: var(--primary-ink); }
+.btn:disabled { opacity: .45; cursor: default; }
+.icon { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 48px; border-radius: 24px; border: 0;
+  background: var(--surface2); color: var(--ink); cursor: pointer; padding: 0 12px; font: 600 16px var(--sans); }
+.link { display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 8px; margin-left: -8px; border: 0; background: none;
+  color: var(--ink); font: 500 17px var(--sans); cursor: pointer; }
+.hero { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; min-height: 260px;
+  margin-top: 20px; border-radius: 24px; background: var(--primary); color: var(--primary-ink); cursor: pointer; text-align: center; padding: 20px; }
+.hero:has(:focus-visible) { outline: 3px solid var(--focus); outline-offset: 3px; }
+.hero b { font: 600 28px/1.2 var(--serif); }
+.hero small { font-size: 16px; opacity: .85; }
+.hero input, .vh { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.list { margin-top: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 62px; padding: 8px 16px; border: 0; border-top: 1px solid var(--line);
+  background: none; color: var(--ink); font: 17px var(--sans); text-align: left; cursor: pointer; }
+.row:first-child { border-top: 0; }
+.row > span { flex: 1; display: flex; flex-direction: column; }
+.row small, .dis small { color: var(--muted); font-size: 15px; }
+.chev { color: var(--muted); }
+.row > .chev, .dis summary > .chev { flex: none; }
+.note { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; margin-top: 16px; border-radius: 14px; background: var(--warn-soft); font-size: 16px; }
+.note.ok { background: var(--ok-soft); }
+.note.bad { background: var(--danger-soft); }
+.note p { margin: 2px 0 0; }
+.note strong { display: block; font-size: 17px; }
+.note .btn { margin-top: 12px; min-height: 48px; }
+.mat { position: relative; background: var(--mat); padding: 12px; border: 10px solid var(--wood); border-radius: 6px; box-shadow: var(--shadow); }
+.mat canvas { display: block; width: 100%; height: auto; aspect-ratio: 5/3; background: #ddd; }
+.cap { font-size: 15px; color: var(--muted); margin: 8px 0 0; text-align: center; }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 2px; }
+.strip button { flex: 0 0 80px; height: 48px; padding: 0; border: 2px solid transparent; border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--surface2); }
+.strip button[aria-current=true] { border-color: var(--ink); }
+.strip canvas { width: 100%; height: 100%; display: block; }
+fieldset { border: 0; padding: 0; margin: 20px 0 0; min-width: 0; }
+legend, .lbl { display: block; padding: 0; font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+.looks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.looks label { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 8px; border-radius: 12px; background: var(--surface);
+  border: 1.5px solid var(--line); cursor: pointer; text-align: center; font-size: 16px; }
+.looks canvas { width: 100%; height: auto; aspect-ratio: 5/3; border-radius: 4px; background: var(--surface2); }
+.looks label:has(:checked) { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); font-weight: 600; }
+.looks input, .seg input, .chips input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.looks label:has(:focus-visible), .seg label:has(:focus-visible), .chips label:has(:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips label { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border-radius: 22px;
+  border: 1.5px solid var(--line); background: var(--surface); font-size: 16px; cursor: pointer; }
+.chips label:has(:checked) { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); font-weight: 600; }
+.dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.2); }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border-radius: 13px; background: var(--surface2); }
+.seg label { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 46px;
+  padding: 4px 4px; border-radius: 10px; font-size: 16px; cursor: pointer; text-align: center; line-height: 1.15; }
+.seg label:has(:checked) { background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
+.pict { position: relative; display: block; width: 44px; height: 26px; border-radius: 3px; background: var(--surface3); overflow: hidden; }
+.pict i { position: absolute; background: var(--ink); }
+details.dis { border-top: 1px solid var(--line); }
+details.dis:last-of-type { border-bottom: 1px solid var(--line); }
+.dis summary { list-style: none; display: flex; align-items: center; gap: 12px; min-height: 60px; cursor: pointer; }
+.dis summary::-webkit-details-marker { display: none; }
+.dis summary > span { flex: 1; }
+.dis summary small { display: block; }
+.dis summary .chev { transition: transform .2s; }
+.dis[open] summary .chev { transform: rotate(90deg); }
+.dis > div { padding: 0 0 18px; }
+.field { display: block; margin: 16px 0 0; }
+.field > span:first-child { display: block; font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+input:not([type=radio]):not([type=checkbox]):not([type=file]), select { display: block; width: 100%; min-height: 50px; padding: 10px 12px; font: 17px var(--sans);
+  color: var(--ink); background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; }
+select { appearance: none; -webkit-appearance: none; padding-right: 36px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 22px, calc(100% - 14px) 22px; background-size: 6px 6px; background-repeat: no-repeat; }
+input::placeholder { color: var(--muted); opacity: .8; }
+.keyrow { display: flex; gap: 8px; }
+.keyrow .icon { border-radius: 12px; }
+.foot { position: sticky; bottom: 0; margin-top: auto; padding: 12px 20px calc(16px + env(safe-area-inset-bottom)); background: var(--bg); box-shadow: 0 -14px 14px var(--bg); }
+.foot .note { margin: 0 0 12px; }
+.bar { height: 10px; border-radius: 5px; background: var(--surface3); overflow: hidden; margin: 8px 0 0; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 5px; transition: width .4s; }
+.prog p { margin: 0; }
+.prog b { font-size: 18px; }
+.done { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; text-align: center; }
+.done p { margin: 0; }
+.check { width: 72px; height: 72px; border-radius: 50%; background: var(--ok-soft); color: var(--ok); display: flex; align-items: center; justify-content: center; margin: 0 auto; }
+.flash::after { content: ""; position: absolute; inset: 12px; background: #191e21; opacity: 0; animation: flash 1s ease-out; pointer-events: none; }
+@keyframes flash { 0%, 35% { opacity: 1; } 100% { opacity: 0; } }
+dialog { border: 0; padding: 0; color: var(--ink); background: var(--bg); }
+dialog::backdrop { background: rgba(30,22,14,.45); }
+.sheet { position: fixed; inset: auto 0 0; margin: 0 auto; width: 100%; max-width: 560px; max-height: 92vh; max-height: 92dvh; border-radius: 22px 22px 0 0; overflow-y: auto; }
+.sheet[open] { animation: up .3s cubic-bezier(.2,.8,.2,1); }
+@keyframes up { from { transform: translateY(100%); } }
+.sheet > div { padding: 0 20px calc(24px + env(safe-area-inset-bottom)); }
+.sheet header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0 6px; background: var(--bg); }
+.sheet h2 { font-size: 22px; }
+.ask { width: calc(100% - 48px); max-width: 340px; border-radius: 18px; padding: 20px; background: var(--surface); box-shadow: var(--shadow); }
+.ask p { margin: 0 0 16px; font-size: 18px; }
+.ask .btn { min-height: 50px; font-size: 17px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.thumb { position: relative; display: block; width: 100%; aspect-ratio: 5/3; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: var(--surface2); cursor: pointer; }
+.thumb canvas { display: block; width: 100%; height: 100%; }
+.thumb .badge { position: absolute; left: 6px; bottom: 6px; display: flex; gap: 4px; }
+.badge span { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 9px; background: rgba(255,252,247,.93); color: #29241e; font-size: 13px; font-weight: 600; }
+.tick { position: absolute; right: 6px; top: 6px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.3);
+  display: flex; align-items: center; justify-content: center; color: #fff; }
+.thumb[aria-pressed=true] .tick { background: var(--accent); border-color: var(--accent); }
+.thumb[aria-pressed=true] canvas { opacity: .7; }
+.selbar { position: sticky; bottom: 0; padding: 12px 0 4px; background: linear-gradient(to top, var(--bg) 80%, transparent); }
+.keep { display: flex; align-items: center; gap: 14px; min-height: 62px; margin-top: 12px; padding: 8px 16px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--surface); cursor: pointer; }
+.keep > span { flex: 1; display: flex; flex-direction: column; }
+.keep small { color: var(--muted); font-size: 15px; }
+.keep input { width: 26px; height: 26px; accent-color: var(--accent); }
+.one .btn { margin-top: 12px; }
+.danger-text { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
-<h1>Photo frame</h1>
-<fieldset id="look">
-  <legend>Look</legend>
-  <label><input type="radio" name="treat" value="natural" checked> Natural</label>
-  <label><input type="radio" name="treat" value="poster"> Poster</label>
-  <label><input type="radio" name="treat" value="duotone"> Duotone</label>
-  <label id="inkrow" for="ink">Duotone colour
-    <select id="ink"><option value="">Automatic</option><option value="3">Red</option><option value="4">Blue</option><option value="2">Yellow</option><option value="5">Green</option></select>
-  </label>
-</fieldset>
-<details id="pinbox">
-  <summary>Show on a date (optional)</summary>
-  <p class="hint">Shown on this day every year instead of the usual picture.</p>
-  <div class="two">
-    <label>Month <select id="month"><option value="">–</option></select></label>
-    <label>Day <select id="day"><option value="">–</option></select></label>
+<body>
+
+<main id="home" class="screen pad">
+  <header class="top"><h1>Photo frame</h1><button class="icon" id="gear" type="button" aria-label="Frame settings" data-i="gear"></button></header>
+  <p class="stat" id="stat" role="status">Looking for the frame…</p>
+  <label class="hero" id="hero"><span data-i="photo" data-s="56"></span><b>Choose photos</b><small>Pick one or more from your phone</small><input id="pick" type="file" accept="image/*" multiple></label>
+  <p id="homeMsg" role="status" class="hint"></p>
+  <div id="napHome"></div>
+  <div class="list">
+    <button class="row" id="openPhotos" type="button" data-i="grid"><span>Photos on the frame<small id="countRow"></small></span><span class="chev" data-i="chev"></span></button>
+    <button class="row" id="openSettings" type="button" data-i="gear"><span>Frame settings<small id="setRow"></small></span><span class="chev" data-i="chev"></span></button>
   </div>
-  <label>Greeting on the photo <input id="greet" maxlength="40" placeholder="Happy birthday!"></label>
-</details>
-<details id="capbox">
-  <summary>Add a caption (optional)</summary>
-  <label>Message <input id="note" maxlength="60"></label>
-  <label>From <input id="from" maxlength="30"></label>
-</details>
-<label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
-<p id="msg" role="status" aria-live="polite"></p>
-<canvas id="view" width="800" height="480" aria-label="Preview of the photo as the frame will show it"></canvas>
-<form id="settings">
-  <h2>Settings</h2>
-  <label for="show">Show</label>
-  <select id="show" name="show"><option value="0">My photos</option><option value="1">Artwork</option><option value="2">Today</option></select>
-  <label for="src">Artwork</label>
-  <select id="src" name="src"><option value="0">Museum art</option><option value="1">Random photos</option></select>
-  <label for="date">Date on the picture</label>
-  <select id="date" name="date"><option value="0">Off</option><option value="1">Corner</option><option value="2">Banner</option><option value="3">Big</option></select>
-  <label for="tz">Time zone</label>
-  <select id="tz" name="tz"><option value="auto">Automatic</option></select>
-  <label for="key">Unsplash access key (optional, for Random photos)</label>
-  <input id="key" name="key" autocomplete="off" autocapitalize="off" spellcheck="false">
-  <button class="btn">Save</button>
-  <p id="saved" role="status" aria-live="polite"></p>
-</form>
-<p id="info"></p>
-<details id="photos">
-  <summary>Photos on the frame</summary>
-  <div id="list"></div>
-  <button id="delsel" type="button" hidden>Delete selected</button>
-</details>
-<details>
-  <summary>Advanced</summary>
-  <p>Firmware version: <span id="ver"></span></p>
-  <button class="btn" id="update" type="button">Update firmware</button>
-  <p id="upmsg" role="status" aria-live="polite"></p>
-</details>
+  <p class="hint" style="margin-top:18px">The frame stays awake for a few minutes after you press its button, then sleeps to save its battery.</p>
+</main>
+
+<section id="prep" class="screen" hidden>
+  <div class="pad" style="padding-bottom:0">
+    <div class="top"><button class="link" id="back" type="button" data-i="back">Back</button></div>
+    <h2 style="margin:0 0 14px">Ready to send</h2>
+    <div class="mat"><canvas id="view" width="800" height="480" role="img" aria-label="Preview of the photo as the frame will show it"></canvas></div>
+    <p class="cap" id="viewCap"></p>
+    <div class="strip" id="strip" role="group" aria-label="Photos you picked" hidden></div>
+    <fieldset id="opts" style="margin:0">
+      <fieldset><legend>Look</legend>
+        <div class="looks" id="look">
+          <label><canvas width="240" height="144"></canvas><input type="radio" name="treat" value="natural" checked>Natural</label>
+          <label><canvas width="240" height="144"></canvas><input type="radio" name="treat" value="poster">Poster</label>
+          <label><canvas width="240" height="144"></canvas><input type="radio" name="treat" value="duotone">Duotone</label>
+        </div>
+        <p class="hint" id="lookHint"></p>
+      </fieldset>
+      <fieldset id="inkset"><legend>Duotone ink</legend>
+        <div class="chips" id="inks">
+          <label><input type="radio" name="ink" value="" checked>Automatic</label>
+          <label><input type="radio" name="ink" value="3"><span class="dot" style="background:#b21318"></span>Red</label>
+          <label><input type="radio" name="ink" value="4"><span class="dot" style="background:#2157ba"></span>Blue</label>
+          <label><input type="radio" name="ink" value="2"><span class="dot" style="background:#efde44"></span>Yellow</label>
+          <label><input type="radio" name="ink" value="5"><span class="dot" style="background:#357846"></span>Green</label>
+        </div>
+      </fieldset>
+      <div style="margin-top:20px">
+        <details class="dis" id="pinbox"><summary data-i="cal"><span>Show on a date every year<small id="pinSum">Optional, with a greeting</small></span><span class="chev" data-i="chev"></span></summary><div>
+          <p class="hint" style="margin:0">Shown on this day every year instead of the usual picture.</p>
+          <div class="two">
+            <label class="field"><span>Month</span><select id="month"><option value="">None</option></select></label>
+            <label class="field"><span>Day</span><select id="day"><option value="">None</option></select></label>
+          </div>
+          <label class="field"><span>Greeting on the photo</span><input id="greet" maxlength="40" placeholder="Happy birthday!"></label>
+        </div></details>
+        <details class="dis" id="capbox"><summary data-i="text"><span>Add a caption<small id="capSum">Optional message and who it is from</small></span><span class="chev" data-i="chev"></span></summary><div>
+          <label class="field" style="margin-top:0"><span>Message</span><input id="note" maxlength="60" placeholder="Thinking of you"></label>
+          <label class="field"><span>From</span><input id="from" maxlength="30" placeholder="Anna"></label>
+        </div></details>
+      </div>
+    </fieldset>
+  </div>
+  <div class="foot">
+    <div id="sendMsg"></div>
+    <div class="prog" id="prog" role="status" hidden><p><b id="progT"></b></p><div class="bar"><i id="barI"></i></div><p class="hint">Keep this page open until it says Sent.</p></div>
+    <button class="btn primary" id="send" type="button" data-i="send"><span id="sendT">Send to the frame</span></button>
+  </div>
+</section>
+
+<section id="sent" class="screen pad" hidden>
+  <div class="done">
+    <div class="check" data-i="check" data-s="36"></div>
+    <h2 id="sentT" tabindex="-1"></h2>
+    <p id="sentP"></p>
+    <div class="mat" id="sentMat" style="margin:6px 8px"><canvas id="sentView" width="800" height="480" role="img" aria-label="The photo you sent, as the frame will show it"></canvas></div>
+    <p class="hint">To send more, press the button on the frame and open this page again.</p>
+  </div>
+  <button class="btn line" id="doneBtn" type="button" style="margin-top:20px">Done</button>
+</section>
+
+<dialog class="sheet" id="setDlg" aria-labelledby="setH"><div>
+  <header><h2 id="setH">Frame settings</h2><button class="icon x" type="button" aria-label="Close" data-i="x"></button></header>
+  <form id="settings">
+    <fieldset style="margin-top:4px"><legend>What the frame shows</legend>
+      <div class="seg"><label><input type="radio" name="show" value="0">My photos</label><label><input type="radio" name="show" value="1">Artwork</label><label><input type="radio" name="show" value="2">Today</label></div>
+      <p class="hint" id="showHint"></p>
+    </fieldset>
+    <fieldset id="artset"><legend>Artwork from</legend>
+      <div class="seg"><label><input type="radio" name="src" value="0">Museum art</label><label><input type="radio" name="src" value="1">Random photos</label></div>
+    </fieldset>
+    <div class="field" id="keyset"><label class="lbl" for="key">Unsplash access key <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <div class="keyrow"><input id="key" name="key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button class="icon" id="eye" type="button" aria-label="Show key" aria-pressed="false" aria-controls="key" data-i="eye"></button></div>
+      <p class="hint">Free from unsplash.com/developers. Without it, random photos come from Lorem Picsum.</p>
+    </div>
+    <fieldset><legend>Date on the picture</legend>
+      <div class="seg">
+        <label><span class="pict"></span><input type="radio" name="date" value="0">Off</label>
+        <label><span class="pict"><i style="right:3px;bottom:3px;width:14px;height:5px"></i></span><input type="radio" name="date" value="1">Corner</label>
+        <label><span class="pict"><i style="left:0;right:0;bottom:0;height:6px"></i></span><input type="radio" name="date" value="2">Banner</label>
+        <label><span class="pict"><i style="left:3px;bottom:3px;width:12px;height:12px"></i></span><input type="radio" name="date" value="3">Big</label>
+      </div>
+    </fieldset>
+    <label class="field" for="tz"><span>Time zone</span><select id="tz" name="tz"><option value="auto">Automatic</option></select></label>
+    <p class="hint">The date and time are set automatically over the internet.</p>
+    <button class="btn primary" id="save" style="margin-top:22px" disabled>Save</button>
+    <div id="saved" role="status"></div>
+  </form>
+  <details class="dis" style="margin-top:20px"><summary><span>Advanced</span><span class="chev" data-i="chev"></span></summary><div>
+    <p style="margin:0 0 12px">Firmware version <strong id="ver" style="font-variant-numeric:tabular-nums"></strong></p>
+    <button class="btn line" id="update" type="button">Update firmware</button>
+    <p class="hint" id="upmsg" role="status"></p>
+  </div></details>
+</div></dialog>
+
+<dialog class="sheet" id="phDlg" aria-labelledby="phH"><div>
+  <header><h2 id="phH">Photos on the frame</h2><button class="icon x" type="button" aria-label="Close" data-i="x"></button></header>
+  <div class="top" style="min-height:48px"><p class="stat" id="phCount"></p><button class="link" id="selBtn" type="button">Select</button></div>
+  <div class="grid" id="grid"></div>
+  <p class="hint" id="empty" hidden>No photos yet. The photos you send will appear here.</p>
+  <div id="napPh"></div>
+  <div class="selbar" id="selbar" hidden><button class="btn danger" id="delsel" type="button" data-i="trash" disabled><span id="delT"></span></button></div>
+</div></dialog>
+
+<dialog class="sheet one" id="oneDlg" aria-labelledby="oneH"><div>
+  <header><h2 id="oneH">Photo</h2><button class="icon x" type="button" aria-label="Close" data-i="x"></button></header>
+  <div class="mat"><canvas id="oneView" width="800" height="480" role="img" aria-label="The photo on the frame"></canvas></div>
+  <button class="btn primary" id="showNow" type="button">Show this now</button>
+  <p class="hint" id="oneMsg" role="status"></p>
+  <label class="keep" id="keepRow"><span>Keep on the frame<small>Never removed to make room for new photos</small></span><input type="checkbox" id="keepBox"></label>
+  <p class="hint" id="pinNote"></p>
+  <button class="btn line danger-text" id="delOne" type="button" data-i="trash">Delete from the frame</button>
+</div></dialog>
+
+<dialog class="ask" id="askDlg" aria-labelledby="askT"><form method="dialog">
+  <p id="askT"></p>
+  <div class="two"><button class="btn" value="">Cancel</button><button class="btn danger" id="askOk" value="y"></button></div>
+</form></dialog>
+
 <script>
 const W = 800, H = 480;
 // Approximate measured Spectra 6 ink colours, in the order the frame expects:
@@ -169,183 +369,445 @@ function pack(idx) {
 }
 // DITHER-END
 
-const msg = document.getElementById('msg'), view = document.getElementById('view'), pick = document.getElementById('pick');
-const ASLEEP = 'The frame has gone to sleep. Press the button on the frame, then reload this page.';
-const ctx = view.getContext('2d', { willReadFrequently: true });
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const tick = () => new Promise(r => setTimeout(r, 0));
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const ICONS = {
+  photo: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>',
+  back: '<path d="M15 6l-6 6 6 6"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  send: '<path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/>',
+  cal: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  text: '<path d="M5 6h14M5 11h14M5 16h9"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeoff: '<path d="M3 3l18 18M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.1 3.9M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a10 10 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  button: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="17" cy="12" r="2.2"/>',
+  star: '<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8 6.8 19.6l1-5.8L3.5 9.7l5.9-.8z"/>',
+};
+const ic = (n, s = 24) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
+for (const e of $$('[data-i]')) e.insertAdjacentHTML('afterbegin', ic(e.dataset.i, +e.dataset.s || 24));
 
-const look = document.getElementById('look'), ink = document.getElementById('ink');
-const treat = () => look.querySelector(':checked').value;
-try {
-  const [t, k] = localStorage.getItem('look').split(',');
-  look.querySelector(`[value=${t}]`).checked = true;
-  ink.value = k;
-} catch (e) {}
-look.onchange = () => { try { localStorage.setItem('look', treat() + ',' + ink.value); } catch (e) {} };
+// ---------- talking to the frame ----------
+// The frame serves one request at a time and, asleep, is off the network: a request may hang
+// instead of failing, so each has a time limit. Failure to reach it throws 'asleep'.
+async function api(path, opt = {}, ms = 8000, as = 'text') {
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms);
+  let r, body;
+  try {
+    r = await fetch(path, { ...opt, signal: c.signal });
+    body = await (r.ok ? r[as]() : r.text());
+  } catch (e) { throw new Error('asleep'); } finally { clearTimeout(t); }
+  if (!r.ok) throw new Error(body || 'http');
+  return body;
+}
 
-const month = document.getElementById('month'), day = document.getElementById('day'), greet = document.getElementById('greet');
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-MONTHS.forEach((m, i) => month.add(new Option(m, i + 1)));
-for (let d = 1; d <= 31; d++) day.add(new Option(d, d));
+// Asleep: the home screen offers "Try again" instead of the big button, and the place where the
+// request failed says the same. finished: a send or a save has told the frame to finish and sleep.
+let asleep = false, finished = false, loaded = false, stored = [], max = 10, battery = -1;
+const ASLEEP = 'The frame is asleep. Press the button on the frame, then tap Try again.';
+function nap(box, text, retry) {
+  box.innerHTML = `<div class="note" role="alert">${ic('button')}<div><strong>Press the button on the frame</strong><p></p><button class="btn line" type="button">Try again</button></div></div>`;
+  box.querySelector('p').textContent = text;
+  box.querySelector('button').onclick = () => { box.innerHTML = ''; retry(); };
+  setAsleep(true);
+}
+function setAsleep(on) {
+  asleep = on;
+  $('#hero').hidden = on;
+  if (on && !$('#napHome').firstChild) nap($('#napHome'), ASLEEP, wake);
+  if (!on) $('#napHome').innerHTML = '';
+  status();
+}
+function status() {
+  const s = stored.length;
+  $('#stat').textContent = asleep ? 'The frame is asleep' : !loaded ? 'Looking for the frame…'
+    : `${s} of ${max} photos` + (battery >= 0 ? ` · Battery ${Math.min(100, battery)}%` : '');
+  $('#countRow').textContent = !loaded ? '' : s ? `${s} of ${max}` : 'None yet';
+  $('#phCount').textContent = loaded ? `${s} of ${max} photos` : '';
+}
+async function wake(box = $('#napHome'), then) {  // after "Try again": is the frame awake now?
+  try { apply(await api('/status', {}, 8000, 'json')); finished = false; setAsleep(false); then && then(); }
+  catch (e) { nap(box, ASLEEP, () => wake(box, then)); }
+}
+function apply(s) {
+  stored = s.list; max = s.max; battery = s.battery_pct;
+  $('#ver').textContent = s.version;
+  if (!loaded) {  // fill the form once: a later check must not undo unsaved changes
+    const f = $('#settings');
+    f.show.value = s.show; f.src.value = s.src; f.date.value = s.date; f.tz.value = s.tz; f.key.value = s.key;
+    loaded = true; $('#save').disabled = false; settingsShown();
+  }
+  status();
+}
 
+// ---------- picking, the preview and the three looks ----------
+const work = document.createElement('canvas'), wctx = work.getContext('2d', { willReadFrequently: true });
+work.width = W; work.height = H;
+let picks = [], cur = 0, sendFrom = 0, busy = false, picking = false;
+
+// Decode, turn upright, crop to fill 800x480 (a little above centre) and keep only those pixels:
+// a dozen full-size phone photos held at once would exhaust Safari's memory.
+async function crop(file) {
+  let img, url;
+  try { img = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch (e) { img = new Image(); img.src = url = URL.createObjectURL(file); await img.decode(); }
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const s = Math.max(W / iw, H / ih), sw = W / s, sh = H / s;
+  wctx.fillStyle = '#fff'; wctx.fillRect(0, 0, W, H);
+  wctx.drawImage(img, (iw - sw) / 2, (ih - sh) * 0.45, sw, sh, 0, 0, W, H);
+  if (img.close) img.close();
+  if (url) URL.revokeObjectURL(url);
+  const px = wctx.getImageData(0, 0, W, H);
+  return { px, auto: dominantInk(px.data), memo: {} };
+}
+const look = () => $('#look :checked').value, inkSel = () => $('#inks :checked').value;
+function base(p, t = look()) {  // the dithered photo without text, kept so typing never dithers again
+  const ink = t == 'duotone' ? +inkSel() || p.auto : 0, key = t + ink;
+  return p.memo[key] || (p.memo[key] = dither(p.px.data, t, ink || p.auto));
+}
 // The greeting (red) and caption (black) go in a white band across the top, drawn after dithering.
+const txt = document.createElement('canvas'), tctx = txt.getContext('2d', { willReadFrequently: true });
+txt.width = W; txt.height = H;
 function band(idx) {
-  const v = id => document.getElementById(id).value.trim(), from = v('from');
+  const v = id => $('#' + id).value.trim(), from = v('from');
   const lines = [[v('greet'), 'bold', 56, 3], [v('note'), '', 36, 0], [from && '– ' + from, 'italic', 30, 0]].filter(l => l[0]);
   if (!lines.length) return;
-  const c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
-  c.width = W; c.height = H;
-  x.textAlign = 'center'; x.textBaseline = 'top';
-  const font = (style, size) => x.font = `${style} ${size}px system-ui, -apple-system, sans-serif`;
-  for (const l of lines) while (font(l[1], l[2]), x.measureText(l[0]).width > W - 60 && l[2] > 12) l[2]--;
+  tctx.textAlign = 'center'; tctx.textBaseline = 'top';
+  const font = (style, size) => tctx.font = `${style} ${size}px system-ui, -apple-system, sans-serif`;
+  for (const l of lines) while (font(l[1], l[2]), tctx.measureText(l[0]).width > W - 60 && l[2] > 12) l[2]--;
   let y = 24;
   idx.fill(1, 0, (y + lines.reduce((h, l) => h + l[2] * 1.25, 0) + 12 | 0) * W);
   for (const [text, style, size, ink] of lines) {
     font(style, size);
-    x.clearRect(0, 0, W, H);
-    x.fillText(text, W / 2, y);
-    stamp(idx, x.getImageData(0, 0, W, H).data, ink);
+    tctx.clearRect(0, 0, W, H);
+    tctx.fillText(text, W / 2, y);
+    stamp(idx, tctx.getImageData(0, 0, W, H).data, ink);
     y += size * 1.25 | 0;
   }
 }
-
-async function send(file) {
-  // Photos from a phone camera are often stored sideways with an EXIF rotation tag.
-  const img = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
-  const s = Math.max(W / img.width, H / img.height), sw = W / s, sh = H / s;
-  ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) * 0.45, sw, sh, 0, 0, W, H);  // fill the frame, crop the rest
-  const px = ctx.getImageData(0, 0, W, H), t = treat();
-  const idx = dither(px.data, t, +ink.value || dominantInk(px.data));
-  band(idx);
-  for (let i = 0; i < idx.length; i++) px.data.set(PALETTE[idx[i]], i * 4);
-  ctx.putImageData(px, 0, 0);
-  view.style.display = 'block';
-  const form = new FormData();
-  form.append('photo', new Blob([pack(idx)]), 'photo.bin');
-  const pin = month.value && day.value ? `?pin=${month.value * 100 + +day.value}` : '';
-  const r = await fetch('/upload' + pin, { method: 'POST', body: form });
-  if (!r.ok) throw new Error(await r.text());
+const final = p => { const idx = base(p).slice(); band(idx); return idx; };
+function draw(canvas, px) {  // full-size pixels into any canvas, smoothed when smaller
+  wctx.putImageData(px, 0, 0);
+  const c = canvas.getContext('2d');
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(work, 0, 0, canvas.width, canvas.height);
 }
+function paint(canvas, idx) {
+  const px = wctx.createImageData(W, H), d = px.data;
+  for (let i = 0; i < idx.length; i++) { const c = PALETTE[idx[i]]; d[i*4] = c[0]; d[i*4+1] = c[1]; d[i*4+2] = c[2]; d[i*4+3] = 255; }
+  draw(canvas, px);
+}
+const pinned = () => $('#month').value && $('#day').value;
+const pinLabel = () => `${$('#day').value} ${MONTHS[$('#month').value - 1]}`;
+const HINTS = { natural: 'Closest to the photo.', poster: 'Flatter areas of colour.', duotone: 'Black, white and one ink.' };
+let drawn = 0;
+async function redraw(all) {  // the big preview, then (all) the three small ones for the same photo
+  const p = picks[cur], my = ++drawn;
+  if (!p) return;
+  paint($('#view'), final(p));
+  $('#view').setAttribute('aria-label', `Preview of photo ${cur + 1} of ${picks.length} as the frame will show it`);
+  $('#lookHint').textContent = HINTS[look()];
+  $('#inkset').hidden = look() != 'duotone';
+  for (const l of all ? $$('#look label') : []) {
+    await tick();
+    if (my != drawn) return;
+    paint(l.querySelector('canvas'), base(p, l.querySelector('input').value));
+  }
+}
+function labels() {
+  $('#pinSum').textContent = pinned() ? `Every ${pinLabel()}` : 'Optional, with a greeting';
+  const n = $('#note').value.trim(), f = $('#from').value.trim();
+  $('#capSum').textContent = n || f ? [n, f && '– ' + f].filter(Boolean).join(' ') : 'Optional message and who it is from';
+  $('#sendT').textContent = picks.length > 1 ? `Send ${picks.length} photos to the frame` : 'Send to the frame';
+}
+
+const pick = $('#pick');
+pick.onclick = () => picking = true;
+pick.oncancel = () => { picking = false; };
+pick.onchange = async () => {
+  const files = [...pick.files];
+  picking = false;
+  pick.value = '';
+  if (!files.length) return;
+  $('#homeMsg').textContent = files.length > 1 ? 'Getting your photos ready…' : 'Getting your photo ready…';
+  const got = [];
+  for (const f of files) try { got.push(await crop(f)); } catch (e) {}
+  const bad = files.length - got.length;
+  $('#homeMsg').textContent = got.length ? '' : 'That photo could not be opened. Try a different one.';
+  if (!got.length) return;
+  picks = got; cur = 0; sendFrom = 0;
+  const strip = $('#strip');
+  strip.innerHTML = '';
+  strip.hidden = picks.length < 2;
+  picks.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-label', `Photo ${i + 1}`);
+    b.setAttribute('aria-current', i == 0);
+    b.innerHTML = '<canvas width="160" height="96"></canvas>';
+    draw(b.firstChild, p.px);
+    b.onclick = () => { if (busy) return; cur = i; $$('#strip button').forEach((y, j) => y.setAttribute('aria-current', j == i)); caption(); redraw(true); };
+    strip.append(b);
+  });
+  caption();
+  $('#sendMsg').innerHTML = bad ? `<p class="hint" style="margin:0 0 12px">${bad} of the photos could not be opened and ${bad > 1 ? 'were' : 'was'} left out.</p>` : '';
+  labels();
+  screen('prep');
+  redraw(true);
+  // Restart the frame's idle time now, and find out before any typing if it has gone to sleep.
+  api('/status', {}, 8000, 'json').then(apply, () => nap($('#sendMsg'), SEND_ASLEEP, () => wake($('#sendMsg'))));
+};
+function caption() {
+  $('#viewCap').textContent = picks.length > 1 ? `Photo ${cur + 1} of ${picks.length}. Tap another below to see it. The frame shows the last one first.`
+    : 'How it will look on the frame';
+}
+function screen(id) {
+  for (const s of ['home', 'prep', 'sent']) $('#' + s).hidden = s != id;
+  scrollTo(0, 0);
+}
+const keepLook = () => { try { localStorage.setItem('look', look() + ',' + inkSel()); } catch (e) {} };
+$('#look').onchange = () => { keepLook(); redraw(false); };
+$('#inks').onchange = () => { keepLook(); redraw(true); };
+try {
+  const [t, k] = localStorage.getItem('look').split(',');
+  $(`#look [value=${t}]`).checked = true;
+  $(`#inks [value="${k}"]`).checked = true;
+} catch (e) {}
+MONTHS.forEach((m, i) => $('#month').add(new Option(m, i + 1)));
+for (let d = 1; d <= 31; d++) $('#day').add(new Option(d, d));
+let typing;
+$('#pinbox').oninput = $('#capbox').oninput = () => { labels(); clearTimeout(typing); typing = setTimeout(() => redraw(false), 250); };
+$('#back').onclick = () => { picks = []; screen('home'); };
+
+// ---------- sending ----------
+const SEND_ASLEEP = 'The frame has gone to sleep. Your photos are still here. Press the button on the frame, then tap Try again.';
+async function send() {
+  const n = picks.length, msg = $('#sendMsg'), pin = pinned() ? `?pin=${$('#month').value * 100 + +$('#day').value}` : '';
+  stopThumbs();
+  busy = true;
+  msg.innerHTML = '';
+  $('#opts').disabled = $('#back').hidden = $('#send').hidden = true;
+  $('#prog').hidden = false;
+  try {
+    // Resume where it stopped: each upload removes the oldest photo, so a resend would cost photos.
+    for (; sendFrom < n; sendFrom++) {
+      $('#progT').textContent = n > 1 ? `Sending ${sendFrom + 1} of ${n}` : 'Sending your photo';
+      $('#barI').style.width = `${Math.max(8, sendFrom / n * 100)}%`;
+      cur = sendFrom;
+      caption();
+      const idx = final(picks[sendFrom]);
+      paint($('#view'), idx);
+      const form = new FormData();
+      form.append('photo', new Blob([pack(idx)]), 'photo.bin');
+      await api('/upload' + pin, { method: 'POST', body: form }, 30000);
+    }
+    $('#barI').style.width = '100%';
+    finished = true;
+    paint($('#sentView'), final(picks[n - 1]));
+    $('#sentT').textContent = pin ? `Saved for ${pinLabel()}` : n > 1 ? `Sent ${n} photos` : 'Sent';
+    $('#sentP').textContent = pin ? `On ${pinLabel()} every year the frame shows ${n > 1 ? 'the last of these photos' : 'this photo'}. Until then it keeps its current picture.`
+      : 'The frame is changing, about half a minute.';
+    $('#sentMat').classList.toggle('flash', !pin);
+    screen('sent');
+    $('#sentT').focus();
+  } catch (e) {
+    if (e.message == 'full') {
+      msg.innerHTML = `<div class="note bad">${ic('x')}<div><strong>The frame is full of kept photos</strong><p>Delete one, or untick Keep on one, then send again.</p><button class="btn line" type="button">Photos on the frame</button></div></div>`;
+      msg.querySelector('button').onclick = openPhotos;
+    } else nap(msg, SEND_ASLEEP, send);
+  }
+  busy = false;
+  $('#opts').disabled = $('#back').hidden = $('#send').hidden = false;
+  $('#prog').hidden = true;
+}
+$('#send').onclick = send;
+$('#doneBtn').onclick = () => {
+  picks = [];
+  for (const id of ['month', 'day', 'greet', 'note', 'from']) $('#' + id).value = '';
+  $('#pinbox').open = $('#capbox').open = false;
+  setAsleep(true);  // the frame changes its picture and goes to sleep
+  screen('home');
+};
 
 // Closing the page lets the frame finish at once. Not while uploading or in the photo picker: iPhone
 // Safari can hide the page for the picker.
-let busy = false, picking = false;
-pick.onclick = () => picking = true;
-pick.oncancel = () => picking = false;
 addEventListener('pagehide', () => busy || picking || navigator.sendBeacon('/bye'));
-addEventListener('pageshow', e => e.persisted && fetch('/status').catch(() => msg.textContent = ASLEEP));
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState == 'visible' && !busy && !picking) fetch('/status').catch(() => msg.textContent = ASLEEP);
-});
+const check = () => busy || picking || finished || api('/status', {}, 8000, 'json').then(s => { apply(s); setAsleep(false); }, () => setAsleep(true));
+addEventListener('pageshow', e => e.persisted && check());
+document.addEventListener('visibilitychange', () => document.visibilityState == 'visible' && check());
 
-pick.onchange = async e => {
-  const files = [...e.target.files];
-  picking = false;
-  busy = true;
-  try {
-    for (let i = 0; i < files.length; i++) {
-      msg.textContent = `Sending photo ${i + 1} of ${files.length}…`;
-      await send(files[i]);
-    }
-    msg.textContent = month.value && day.value ? `Saved for ${day.value} ${MONTHS[month.value - 1]}. Until then the frame keeps its picture.`
-      : 'Sent. The frame takes about half a minute to change.';
-  } catch (err) {
-    msg.textContent = err.message == 'full' ? 'The frame is full of kept photos. Delete one under "Photos on the frame" first.'
-      : 'That did not work. Press the button on the frame and try again.';
-  }
-  busy = false;
-  e.target.value = '';
-};
+// ---------- sheets ----------
+for (const b of $$('.x')) b.onclick = () => b.closest('dialog').close();
+for (const d of $$('.sheet')) d.onclick = e => { if (e.target == d) d.close(); };  // a tap on the dimmed page
+function ask(text, ok) {
+  const d = $('#askDlg');
+  $('#askT').textContent = text;
+  $('#askOk').textContent = ok;
+  d.returnValue = '';
+  d.showModal();
+  return new Promise(r => d.onclose = () => r(d.returnValue == 'y'));
+}
 
-const form = document.getElementById('settings'), saved = document.getElementById('saved');
+// ---------- settings ----------
+const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today'], DATES = ['no date', 'date in the corner', 'date banner', 'big date'];
+const SHOW_HINTS = ['Your photos, a different one each day.', 'A new picture from the internet every day.', 'A calendar page with the date and the moon.'];
 for (const m of [-720,-660,-600,-570,-540,-480,-420,-360,-300,-240,-210,-180,-120,-60,0,60,120,180,210,240,270,300,330,345,360,390,420,480,525,540,570,600,630,660,720,765,780,840]) {
-  const a = Math.abs(m), t = `UTC${m < 0 ? '−' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
-  form.tz.add(new Option(t, m));
+  const a = Math.abs(m);
+  form.tz.add(new Option(`UTC${m < 0 ? '−' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`, m));
 }
-form.onsubmit = async e => {
-  e.preventDefault();
+function settingsShown() {  // hidden fields are still sent, so Save never forgets the key
+  const show = form.show.value;
+  $('#showHint').textContent = SHOW_HINTS[show] || '';
+  $('#artset').hidden = show != 1;
+  $('#keyset').hidden = show != 1 || form.src.value != 1;
+  $('#setRow').textContent = loaded ? `${SHOWS[show]} · ${DATES[form.date.value]}` : '';
+}
+form.onchange = settingsShown;
+$('#eye').onclick = () => {
+  const k = form.key, on = k.type == 'password';
+  k.type = on ? 'text' : 'password';
+  $('#eye').setAttribute('aria-pressed', on);
+  $('#eye').innerHTML = ic(on ? 'eyeoff' : 'eye');
+};
+async function save() {
+  const out = $('#saved'), btn = $('#save');
+  out.innerHTML = '';
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
   try {
-    const r = await fetch('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) });
-    if (!r.ok) throw 0;
-    saved.textContent = 'Saved. The frame is updating now, which takes about half a minute. Press its button again to change more.';
-  } catch (err) {
-    saved.textContent = 'Not saved. Press the button on the frame and try again.';
+    await api('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) }, 10000);
+    out.innerHTML = `<div class="note ok">${ic('check')}<div><strong>Saved</strong><p>The frame is updating now, about half a minute. Press its button again to change more.</p></div></div>`;
+    finished = true;
+    setAsleep(true);
+  } catch (e) {
+    nap(out, 'The frame has gone to sleep, so this was not saved. Press the button on the frame, then tap Try again.', save);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save';
+}
+form.onsubmit = e => { e.preventDefault(); if (loaded) save(); };
+$('#gear').onclick = $('#openSettings').onclick = () => { $('#saved').innerHTML = ''; $('#setDlg').showModal(); };
+$('#update').onclick = async () => {
+  const m = $('#upmsg');
+  if (!await ask('Restart the frame into update mode? You will need the firmware file.', 'Restart')) return;
+  try {
+    await api('/updater', { method: 'POST' });
+    m.textContent = 'Restarting. In about half a minute, reload this page to choose the firmware file.';
+  } catch (e) {
+    m.textContent = e.message == 'asleep' ? 'That did not work. Press the button on the frame and try again.' : 'This frame has no updater installed.';
   }
 };
 
-document.getElementById('update').onclick = async () => {
-  const upmsg = document.getElementById('upmsg');
-  if (!confirm('Restart the frame into update mode?')) return;
-  try {
-    const r = await fetch('/updater', { method: 'POST' });
-    if (!r.ok) throw 0;
-    upmsg.textContent = 'Restarting. In about half a minute, reload this page to choose the firmware file.';
-  } catch (err) {
-    upmsg.textContent = 'That did not work. Press the button on the frame and try again.';
+// ---------- photos on the frame ----------
+// Thumbnails come one at a time while the sheet is open (the frame serves one request at a time).
+const bytes = {}, sel = new Set();
+let selecting = false, loading = 0, one = 0;
+function unpack(b) {  // the reverse of pack(); a byte above 215 is three white pixels
+  const idx = new Uint8Array(W * H);
+  for (let i = 0; i < idx.length; i++) {
+    const v = b[i / 3 | 0], k = i % 3;
+    idx[i] = v > 215 ? 1 : k == 0 ? v / 36 | 0 : k == 1 ? (v / 6 | 0) % 6 : v % 6;
   }
-};
-
-// Thumbnails: fetched one at a time when the section is opened (the frame serves one request at a time).
-const list = document.getElementById('list'), photos = document.getElementById('photos');
-let stored = [];
-function unpack(bytes, px) {  // the reverse of pack(), into RGBA
-  for (let i = 0; i < W * H; i++) {
-    const b = bytes[i / 3 | 0], p = b > 215 ? 1 : [b / 36 | 0, (b / 6 | 0) % 6, b % 6][i % 3];
-    px.set(PALETTE[p], i * 4);
-    px[i * 4 + 3] = 255;
-  }
+  return idx;
 }
-async function act(seq, what) {
-  const r = await fetch(`/photo?seq=${seq}&do=${what}`, { method: 'POST' });
-  if (!r.ok) throw 0;
-}
-delsel.onclick = async () => {
-  const picked = [...list.querySelectorAll('.sel:checked')];
-  if (!confirm(picked.length == 1 ? 'Delete this photo from the frame?' : `Delete these ${picked.length} photos from the frame?`)) return;
-  for (const box of picked)  // one at a time: the frame serves a single request at once
-    try { await act(box.value, 'delete'); box.closest('.ph').remove(); } catch (e) { msg.textContent = ASLEEP; break; }
-  delsel.hidden = !list.querySelector('.sel:checked');
-};
-photos.ontoggle = async () => {
-  if (!photos.open || list.childElementCount) return;
-  if (!stored.length) list.textContent = 'No photos yet.';
-  const full = document.createElement('canvas'), fctx = full.getContext('2d');
-  full.width = W; full.height = H;
-  const px = fctx.createImageData(W, H);
+const pinOf = meta => meta & 0x7fff, kept = meta => meta & 0x8000;
+const dayOf = (pin, len) => `${pin % 100} ${MONTHS[(pin / 100 | 0) - 1].slice(0, len)}`;
+function grid() {
+  const g = $('#grid');
+  g.innerHTML = '';
+  $('#empty').hidden = !!stored.length || asleep;
+  $('#selBtn').hidden = !stored.length;
+  $('#selBtn').textContent = selecting ? 'Cancel' : 'Select';
+  $('#selbar').hidden = !selecting;
   for (const [seq, meta] of stored) {
-    const row = document.createElement('div'), c = document.createElement('canvas');
-    row.className = 'ph';
-    c.width = 200; c.height = 120;
-    c.setAttribute('aria-label', `Photo ${seq}`);
-    const show = document.createElement('button'), sel = document.createElement('label');
-    show.textContent = 'Show now';
-    sel.innerHTML = '<input type="checkbox" class="sel"> Select';
-    sel.firstChild.value = seq;
-    sel.firstChild.onchange = () => delsel.hidden = !list.querySelector('.sel:checked');
-    const keep = document.createElement('label');
-    keep.innerHTML = '<input type="checkbox"> Keep';
-    const box = keep.firstChild;
-    box.checked = meta & 0x8000;
-    const pin = meta & 0x7fff;
-    if (pin) keep.textContent = `Shown on ${pin % 100} ${MONTHS[(pin / 100 | 0) - 1]}`;
-    row.append(c, show, sel, keep);
-    list.append(row);
-    show.onclick = () => act(seq, 'show').then(() => show.textContent = 'Shown when you close this page', () => show.textContent = 'Failed');
-    box.onchange = () => act(seq, box.checked ? 'keep' : 'unkeep').catch(() => box.checked = !box.checked);
-    try {
-      const r = await fetch(`/photo?seq=${seq}`);
-      unpack(new Uint8Array(await r.arrayBuffer()), px.data);
-      fctx.putImageData(px, 0, 0);
-      c.getContext('2d').drawImage(full, 0, 0, 200, 120);
-    } catch (e) { msg.textContent = ASLEEP; return; }
+    const b = document.createElement('button'), pin = pinOf(meta);
+    b.type = 'button';
+    b.className = 'thumb';
+    b.dataset.seq = seq;
+    b.setAttribute('aria-label', 'Photo' + (kept(meta) ? ', kept' : '') + (pin ? `, shown on ${dayOf(pin)}` : ''));
+    if (selecting) b.setAttribute('aria-pressed', sel.has(seq));
+    b.innerHTML = `<canvas width="400" height="240"></canvas><span class="badge">${kept(meta) && !pin ? `<span>${ic('star', 12)}Kept</span>` : ''}${pin ? `<span>${ic('cal', 12)}${dayOf(pin, 3)}</span>` : ''}</span>${selecting ? `<span class="tick">${sel.has(seq) ? ic('check', 18) : ''}</span>` : ''}`;
+    if (bytes[seq]) paint(b.firstChild, unpack(bytes[seq]));
+    b.onclick = () => selecting ? (sel.has(seq) ? sel.delete(seq) : sel.add(seq), grid()) : openOne(seq);
+    g.append(b);
   }
+  const k = sel.size;
+  $('#delsel').disabled = !k;
+  $('#delT').textContent = k ? `Delete (${k})` : 'Select photos to delete';
+  status();
+}
+const photosAsleep = () => nap($('#napPh'), ASLEEP, () => wake($('#napPh'), openPhotos));
+async function thumbs() {
+  if (asleep) return;
+  const my = ++loading;
+  for (const [seq] of stored) {
+    if (bytes[seq]) continue;
+    try { bytes[seq] = new Uint8Array(await api(`/photo?seq=${seq}`, {}, 15000, 'arrayBuffer')); }
+    catch (e) { if (my == loading) photosAsleep(); return; }
+    if (my != loading) return;
+    const c = $(`.thumb[data-seq="${seq}"] canvas`);
+    if (c) paint(c, unpack(bytes[seq]));
+  }
+}
+const stopThumbs = () => loading++;
+function openPhotos() {
+  $('#napPh').innerHTML = '';
+  selecting = false;
+  sel.clear();
+  grid();
+  if (!$('#phDlg').open) $('#phDlg').showModal();
+  if (asleep) photosAsleep(); else thumbs();
+}
+$('#openPhotos').onclick = openPhotos;
+$('#phDlg').onclose = stopThumbs;
+$('#selBtn').onclick = () => { selecting = !selecting; sel.clear(); grid(); };
+const act = (seq, what) => api(`/photo?seq=${seq}&do=${what}`, { method: 'POST' });
+function drop(seq) {
+  stored = stored.filter(p => p[0] != seq);
+  delete bytes[seq];
+  sel.delete(seq);
+}
+$('#delsel').onclick = async () => {
+  const k = sel.size;
+  if (!await ask(k == 1 ? 'Delete this photo from the frame?' : `Delete these ${k} photos from the frame?`, 'Delete')) return;
+  for (const seq of [...sel])  // one at a time: the frame serves a single request at once
+    try { await act(seq, 'delete'); drop(seq); } catch (e) { photosAsleep(); break; }
+  selecting = false;
+  grid();
+};
+function openOne(seq) {
+  const meta = stored.find(p => p[0] == seq)[1], pin = pinOf(meta);
+  one = seq;
+  stopThumbs();
+  $('#oneMsg').textContent = '';
+  $('#keepRow').hidden = !!pin;
+  $('#keepBox').checked = !!kept(meta);
+  $('#pinNote').textContent = pin ? `Shown on ${dayOf(pin)} every year. Photos with a date are never removed to make room.` : '';
+  const c = $('#oneView');
+  if (bytes[seq]) paint(c, unpack(bytes[seq])); else c.getContext('2d').clearRect(0, 0, W, H);
+  $('#oneDlg').showModal();
+}
+$('#oneDlg').onclose = () => $('#phDlg').open && thumbs();
+$('#showNow').onclick = () => act(one, 'show').then(() => $('#oneMsg').textContent = 'The frame will show it when you close this page.',
+  () => { $('#oneDlg').close(); photosAsleep(); });
+$('#keepBox').onchange = async () => {
+  const box = $('#keepBox'), p = stored.find(p => p[0] == one);
+  try { await act(one, box.checked ? 'keep' : 'unkeep'); p[1] = box.checked ? p[1] | 0x8000 : p[1] & 0x7fff; grid(); }
+  catch (e) { box.checked = !box.checked; $('#oneDlg').close(); photosAsleep(); }
+};
+$('#delOne').onclick = async () => {
+  if (!await ask('Delete this photo from the frame?', 'Delete')) return;
+  try { await act(one, 'delete'); drop(one); } catch (e) { photosAsleep(); }
+  $('#oneDlg').close();
+  grid();
 };
 
-fetch('/status').then(r => r.json()).then(s => {
-  stored = s.list;
-  document.getElementById('info').textContent =
-    `${s.photos} of ${s.max} photos stored` + (s.battery_pct >= 0 ? ` · Battery ${Math.min(100, s.battery_pct)}%` : '');
-  document.getElementById('ver').textContent = s.version;
-  form.show.value = s.show; form.src.value = s.src; form.date.value = s.date; form.tz.value = s.tz; form.key.value = s.key;
-}).catch(() => {});
+status();
+api('/status', {}, 8000, 'json').then(apply, () => setAsleep(true));
 </script>
 </html>
