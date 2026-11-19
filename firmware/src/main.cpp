@@ -15,11 +15,13 @@
 #include <GxEPD2_7C.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#include <SPI.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiProv.h>
 #include <Wire.h>
 #include <driver/rtc_io.h>
+#include <esp_wifi.h>
 #include <qrcode.h>
 
 #ifndef ROTATE_SECONDS
@@ -30,9 +32,13 @@ const int W = 800, H = 480;
 const size_t PHOTO_BYTES = W * H / 2;  // 4 bits per pixel
 const int MAX_PHOTOS = 10;             // 10 x 192 KB fits the 2.2 MB photos partition
 const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
-const uint32_t SESSION_MS = 180000;    // upload window after a button press
+#ifndef SESSION_SECONDS
+#define SESSION_SECONDS 180
+#endif
+const uint32_t SESSION_MS = SESSION_SECONDS * 1000UL;  // upload window after a button press
 const uint32_t SETUP_MS = 600000;      // how long Bluetooth setup stays open
 const uint32_t HOLD_RESET_MS = 5000;
+const uint16_t LOW_BATTERY_MV = 3400;  // tune to the cell; below this the frame stops rotating
 const uint32_t WIFI_TIMEOUT_MS = 20000;
 const char *FS_ROOT = "/littlefs";
 
@@ -49,6 +55,19 @@ WebServer server(80);
 volatile bool provStarted, gotIp, credFail;
 uint32_t lastActivity, lastUpload;
 bool uploaded;
+bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
+
+const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
+
+// A colour refresh takes about 30 s. Doze instead of spinning the CPU while the panel is busy.
+void whilePanelBusy(const void *) {
+  if (!radioOff) { delay(10); return; }
+  gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_timer_wakeup(1000000);
+  esp_light_sleep_start();
+  gpio_wakeup_disable(GPIO_NUM_5);
+}
 
 // ---------- photo store: /<8-digit sequence>.bin, highest is newest ----------
 
@@ -72,8 +91,22 @@ String photoPath(uint32_t seq) {
 
 // ---------- display ----------
 
+// The panel's control lines must never float: left alone they pick up noise, the display board's
+// booster switches on and draws about 75 mA while awake and 0.85 mA asleep (both measured).
+// Held low, the controller sits in reset and the whole frame sleeps at about 22 uA.
+void panelOff() {
+  SPI.end();
+  for (uint8_t pin : PANEL_PINS) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    gpio_hold_en((gpio_num_t)pin);
+  }
+}
+
 void displayBegin() {
+  for (uint8_t pin : PANEL_PINS) gpio_hold_dis((gpio_num_t)pin);
   display.init(0, true, 2, false);
+  display.epd2.setBusyCallback(whilePanelBusy);
   display.setRotation(0);
   display.setFullWindow();
 }
@@ -96,6 +129,7 @@ bool showPhoto(uint32_t seq) {
     }
   } while (display.nextPage());
   display.hibernate();
+  panelOff();
   prefs.putUInt("cur", seq);
   return true;
 }
@@ -123,6 +157,7 @@ void showText(const char *title, const char *const *lines, int n, esp_qrcode_han
     }
   } while (display.nextPage());
   display.hibernate();
+  panelOff();
 }
 
 // ---------- power ----------
@@ -150,6 +185,9 @@ uint16_t batteryMv() {  // MAX17048 fuel gauge, VCELL register; 0 if absent
   digitalWrite(PIN_I2C_POWER, LOW);
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
   while (digitalRead(BUTTON) == LOW) delay(20);  // a held button would wake us straight away
+  panelOff();
+  gpio_deep_sleep_hold_en();
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   rtc_gpio_pullup_en(BUTTON);
   rtc_gpio_pulldown_dis(BUTTON);
   esp_sleep_enable_ext0_wakeup(BUTTON, 0);
@@ -163,6 +201,8 @@ void rotate() {
   uint32_t seqs[MAX_PHOTOS + 1];
   int n = listPhotos(seqs);
   if (n < 2) return;  // nothing to rotate to
+  uint16_t mv = batteryMv();
+  if (mv && mv < LOW_BATTERY_MV) return;  // a refresh on a flat cell can brown out half-drawn; keep the picture
   uint32_t cur = prefs.getUInt("cur", 0), next = seqs[n - 1];
   for (int i = n - 1; i >= 0; i--)
     if (seqs[i] < cur) { next = seqs[i]; break; }  // step to the next older, wrap to newest
@@ -212,11 +252,18 @@ void session(bool resetWifi) {
   snprintf(name, sizeof name, "PROV_frame_%02X%02X", mac[4], mac[5]);
   snprintf(pop, sizeof pop, "%02x%02x%02x%02x", mac[2] ^ 0x5a, mac[3] ^ 0xa5, mac[4] ^ 0x3c, mac[5] ^ 0xc3);
 
+  radioOff = false;
   WiFi.onEvent(onWifiEvent);
   WiFi.setHostname("frame");
-  // Starts Bluetooth setup if no Wi-Fi is stored, otherwise just connects. Bluetooth memory is freed afterwards.
-  WiFiProv.beginProvision(WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_FREE_BTDM, WIFI_PROV_SECURITY_1, pop, name,
-                          nullptr, nullptr, resetWifi);
+  WiFi.mode(WIFI_STA);
+  wifi_config_t stored = {};
+  esp_wifi_get_config(WIFI_IF_STA, &stored);
+  if (stored.sta.ssid[0] && !resetWifi) {
+    WiFi.begin();  // already paired: plain connect, Bluetooth never starts
+  } else {
+    WiFiProv.beginProvision(WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_FREE_BTDM, WIFI_PROV_SECURITY_1, pop, name,
+                            nullptr, nullptr, resetWifi);
+  }
 
   bool setupShown = false;
   uint32_t start = millis();
@@ -243,6 +290,7 @@ void session(bool resetWifi) {
     if (millis() - start > (provStarted ? SETUP_MS : WIFI_TIMEOUT_MS)) return;  // give up, keep the current picture
   }
   Serial.printf("ip %s\n", WiFi.localIP().toString().c_str());
+  WiFi.setSleep(true);  // modem sleep between beacons: about a third of the idle current
 
   if (setupShown) {
     static char ipLine[48];
@@ -278,6 +326,10 @@ void session(bool resetWifi) {
     if (uploaded && millis() - lastUpload > 4000) {  // quiet for 4 s: the batch is done, show the newest
       uint32_t seqs[MAX_PHOTOS + 1];
       int n = listPhotos(seqs);
+      server.stop();
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      radioOff = true;
       if (n) showPhoto(seqs[n - 1]);
       return;
     }
@@ -286,6 +338,8 @@ void session(bool resetWifi) {
 
 void setup() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
+  panelOff();
   pinMode(BUTTON, INPUT_PULLUP);
   pinMode(NEOPIXEL_POWER, OUTPUT);
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
