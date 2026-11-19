@@ -8,15 +8,34 @@
   h1 { font-size: 26px; margin: 8px 0 24px; }
   .btn { display: block; padding: 20px; border-radius: 14px; background: #222; color: #fff; font-size: 20px; cursor: pointer; }
   .btn:focus-within { outline: 3px solid #2157ba; outline-offset: 3px; }
-  input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  #pick { position: absolute; opacity: 0; width: 1px; height: 1px; }
   canvas { width: 100%; height: auto; border-radius: 8px; margin-top: 20px; display: none; }
   #msg { min-height: 1.5em; margin: 20px 0 0; }
   #info { color: #777; font-size: 14px; margin-top: 28px; }
+  form { text-align: left; margin-top: 36px; }
+  h2 { font-size: 20px; margin: 0 0 8px; }
+  form label { display: block; margin-top: 14px; font-size: 16px; color: #555; }
+  select, #key { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 18px; color: #222; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
+  button.btn { width: 100%; margin-top: 20px; border: 0; font: inherit; font-size: 20px; }
+  #saved { min-height: 1.5em; margin: 12px 0 0; text-align: center; }
 </style>
 <h1>Photo frame</h1>
 <label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
 <p id="msg" role="status" aria-live="polite"></p>
 <canvas id="view" width="800" height="480" aria-label="Preview of the photo as the frame will show it"></canvas>
+<form id="settings">
+  <h2>Settings</h2>
+  <label for="show">Show</label>
+  <select id="show" name="show"><option value="0">My photos</option><option value="1">Random artwork</option></select>
+  <label for="date">Date on the picture</label>
+  <select id="date" name="date"><option value="0">Off</option><option value="1">Corner</option><option value="2">Banner</option><option value="3">Big</option></select>
+  <label for="tz">Time zone</label>
+  <select id="tz" name="tz"><option value="auto">Automatic</option></select>
+  <label for="key">Unsplash access key (optional, for Random artwork)</label>
+  <input id="key" name="key" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button class="btn">Save</button>
+  <p id="saved" role="status" aria-live="polite"></p>
+</form>
 <p id="info"></p>
 <script>
 const W = 800, H = 480;
@@ -100,9 +119,26 @@ document.getElementById('pick').onchange = async e => {
   e.target.value = '';
 };
 
+const form = document.getElementById('settings'), saved = document.getElementById('saved');
+for (const m of [-720,-660,-600,-570,-540,-480,-420,-360,-300,-240,-210,-180,-120,-60,0,60,120,180,210,240,270,300,330,345,360,390,420,480,525,540,570,600,630,660,720,765,780,840]) {
+  const a = Math.abs(m), t = `UTC${m < 0 ? '−' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+  form.tz.add(new Option(t, m));
+}
+form.onsubmit = async e => {
+  e.preventDefault();
+  try {
+    const r = await fetch('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) });
+    if (!r.ok) throw 0;
+    saved.textContent = 'Saved. The frame redraws in about a minute.';
+  } catch (err) {
+    saved.textContent = 'Not saved. Press the button on the frame and try again.';
+  }
+};
+
 fetch('/status').then(r => r.json()).then(s => {
   document.getElementById('info').textContent =
-    `${s.photos} of ${s.max} photos stored` + (s.battery_mv ? ` · battery ${(s.battery_mv / 1000).toFixed(2)} V` : '');
+    `${s.photos} of ${s.max} photos stored` + (s.battery_pct >= 0 ? ` · Battery ${Math.min(100, s.battery_pct)}%` : '');
+  form.show.value = s.show; form.date.value = s.date; form.tz.value = s.tz; form.key.value = s.key;
 }).catch(() => {});
 </script>
 </html>
