@@ -118,7 +118,8 @@ static_assert(untilHalfPastMidnight(1800) == 86400 && untilHalfPastMidnight(0) =
               untilHalfPastMidnight(86400 - 600) == 2400 && untilHalfPastMidnight(86400 + 3600) == 84600, "");
 
 // NTP, then the UTC offset when the time zone is automatic. Wi-Fi must be up.
-bool syncClock(uint32_t deadline) {
+bool syncClock() {
+  uint32_t deadline = millis() + 10000;  // lwIP waits a random 0-5 s before its first NTP request
   configTime(0, 0, "pool.ntp.org");
   while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
     if (millis() > deadline) return false;
@@ -483,7 +484,7 @@ void daily() {
   WiFi.mode(WIFI_STA);
   WiFi.begin();
   while (WiFi.status() != WL_CONNECTED && millis() < deadline - 20000) delay(50);  // up to 10 s
-  bool synced = WiFi.status() == WL_CONNECTED && syncClock(millis() + 5000);
+  bool synced = WiFi.status() == WL_CONNECTED && syncClock();
   Serial.printf("wifi %d, synced %d at %lu ms, clock %ld, local day second %ld, heap %u\n", WiFi.status() == WL_CONNECTED,
                 synced, millis(), (long)time(nullptr), (long)(localNow() % 86400), ESP.getFreeHeap());
 #if ROTATE_SECONDS == 86400
@@ -644,7 +645,7 @@ void session(bool resetWifi) {
     }
   }
   server.stop();
-  if (online()) Serial.printf("synced %d\n", syncClock(millis() + 5000));
+  if (online()) Serial.printf("synced %d\n", syncClock());
   bool art = prefs.getUChar("show", 0) && changed && !uploaded;
   if (art) fetchArt(millis() + 30000);
   WiFi.disconnect(true);
