@@ -40,6 +40,7 @@ const char page[] = R"(<!doctype html><meta name=viewport content="width=device-
   while (digitalRead(GPIO_NUM_0) == LOW) delay(20);
   gpio_deep_sleep_hold_en();
   rtc_gpio_pullup_en(GPIO_NUM_0);
+  rtc_gpio_pulldown_dis(GPIO_NUM_0);
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
   esp_deep_sleep_start();
 }
@@ -69,7 +70,7 @@ void setup() {
     if (millis() > WIFI_TIMEOUT_MS) backToFrame();
     delay(50);
   }
-  Serial.printf("updater: ip %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("updater: ip %s, wake cause %d, reset reason %d\n", WiFi.localIP().toString().c_str(), (int)esp_sleep_get_wakeup_cause(), (int)esp_reset_reason());
   MDNS.begin("frame");
   MDNS.addService("http", "tcp", 80);
   server.on("/", HTTP_GET, [] {
