@@ -550,6 +550,13 @@ void handleUpload() {
   }
 }
 
+void confirmFirmware() {
+  esp_ota_mark_app_valid_cancel_rollback();
+  prefs.putBytes("fw", esp_ota_get_app_description()->app_elf_sha256, 32);
+  pending = false;
+  Serial.println("firmware confirmed");
+}
+
 void session(bool resetWifi) {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -657,10 +664,8 @@ void session(bool resetWifi) {
   server.begin();
   Serial.println("serving");
   if (pending) {  // joined Wi-Fi and serving: the new firmware is good
-    esp_ota_mark_app_valid_cancel_rollback();
+    confirmFirmware();
     esp_task_wdt_delete(nullptr);
-    pending = false;
-    Serial.println("new firmware confirmed");
   }
 
   // Ends when idle, 4 s after the last upload (the batch is done) or 30 s after a settings change.
@@ -706,9 +711,16 @@ void setup() {
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on logging when no computer is attached
+  prefs.begin("frame");
   esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
   esp_ota_get_state_partition(esp_ota_get_running_partition(), &state);
   pending = state == ESP_OTA_IMG_PENDING_VERIFY;
+  uint8_t good[32] = {};
+  prefs.getBytes("fw", good, sizeof good);
+  // Leaving the updater without an upload also restarts this app as pending. If this exact build has
+  // worked here before, trust it, or a Wi-Fi outage at that moment would roll back a good firmware.
+  bool known = !memcmp(good, esp_ota_get_app_description()->app_elf_sha256, sizeof good);
+  if (pending ? known : !known) confirmFirmware();
   if (pending) {  // a hang before it has proved itself also rolls back
     esp_task_wdt_init(60, true);
     esp_task_wdt_add(nullptr);
@@ -716,7 +728,6 @@ void setup() {
   Serial.printf("wake cause=%d button=%d firmware %s ota state %d\n", (int)cause, digitalRead(BUTTON), FW_VERSION, (int)state);
   LittleFS.begin(true, FS_ROOT, 5, "photos");
   LittleFS.remove("/up.tmp");
-  prefs.begin("frame");
 
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
     online() ? daily() : rotate();
