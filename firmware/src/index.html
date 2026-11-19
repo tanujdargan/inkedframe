@@ -96,7 +96,8 @@ function pack(idx) {
 }
 // DITHER-END
 
-const msg = document.getElementById('msg'), view = document.getElementById('view');
+const msg = document.getElementById('msg'), view = document.getElementById('view'), pick = document.getElementById('pick');
+const ASLEEP = 'The frame has gone to sleep. Press the button on the frame, then reload this page.';
 const ctx = view.getContext('2d', { willReadFrequently: true });
 
 async function send(file) {
@@ -113,8 +114,21 @@ async function send(file) {
   if (!r.ok) throw new Error(await r.text());
 }
 
-document.getElementById('pick').onchange = async e => {
+// Closing the page lets the frame finish at once. Not while uploading or in the photo picker: iPhone
+// Safari can hide the page for the picker.
+let busy = false, picking = false;
+pick.onclick = () => picking = true;
+pick.oncancel = () => picking = false;
+addEventListener('pagehide', () => busy || picking || navigator.sendBeacon('/bye'));
+addEventListener('pageshow', e => e.persisted && fetch('/status').catch(() => msg.textContent = ASLEEP));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState == 'visible' && !busy && !picking) fetch('/status').catch(() => msg.textContent = ASLEEP);
+});
+
+pick.onchange = async e => {
   const files = [...e.target.files];
+  picking = false;
+  busy = true;
   try {
     for (let i = 0; i < files.length; i++) {
       msg.textContent = `Sending photo ${i + 1} of ${files.length}…`;
@@ -124,6 +138,7 @@ document.getElementById('pick').onchange = async e => {
   } catch (err) {
     msg.textContent = 'That did not work. Press the button on the frame and try again.';
   }
+  busy = false;
   e.target.value = '';
 };
 

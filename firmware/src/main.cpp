@@ -68,7 +68,7 @@ extern const char index_html[] asm("_binary_src_index_html_start");
 Preferences prefs;
 WebServer server(80);
 volatile bool provStarted, gotIp, credFail;
-uint32_t lastActivity, lastUpload;
+uint32_t lastActivity, lastUpload, byeAt;  // byeAt: when the page was closed
 bool uploaded, changed, toUpdater;
 bool pending;  // a new firmware from the updater that has not yet proved itself
 bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
@@ -561,11 +561,16 @@ void onWifiEvent(arduino_event_t *e) {
   if (e->event_id == ARDUINO_EVENT_WIFI_STA_GOT_IP) gotIp = true;
 }
 
+void active() {
+  lastActivity = millis();
+  byeAt = 0;  // a page reload says goodbye, then asks again
+}
+
 void handleUpload() {
   static File f;
   static size_t got;
   HTTPUpload &up = server.upload();
-  lastActivity = millis();
+  active();
   if (up.status == UPLOAD_FILE_START) {
     uint32_t seqs[MAX_PHOTOS + 1];
     int n = listPhotos(seqs);
@@ -665,10 +670,11 @@ void session(bool resetWifi) {
   MDNS.begin("frame");
   MDNS.addService("http", "tcp", 80);
   server.on("/", HTTP_GET, [] {
-    lastActivity = millis();
+    active();
     server.send(200, "text/html", index_html);
   });
   server.on("/status", HTTP_GET, [] {
+    active();
     uint32_t seqs[MAX_PHOTOS + 1];
     int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ);  // SOC: the high byte is whole percent
     char json[300];
@@ -687,7 +693,7 @@ void session(bool resetWifi) {
     prefs.putInt("tz", server.arg("tz") == "auto" ? AUTO_TZ : constrain(server.arg("tz").toInt(), -720, 840));
     prefs.putString("key", key.substring(0, 80));
     changed = true;
-    lastActivity = millis();
+    active();
     server.send(200, "text/plain", "saved");
   });
 #if ROTATE_SECONDS < 86400  // bench builds only: fetch the frame-dithered artwork to look at it
@@ -716,6 +722,10 @@ void session(bool resetWifi) {
     canvas = nullptr;
   });
 #endif
+  server.on("/bye", HTTP_POST, [] {
+    byeAt = millis();
+    server.send(204);
+  });
   server.on("/updater", HTTP_POST, [] {  // restart into the updater app in the other slot
     toUpdater = !esp_ota_set_boot_partition(esp_ota_get_next_update_partition(nullptr));
     server.send(toUpdater ? 200 : 500, "text/plain", toUpdater ? "restarting into the updater" : "no updater installed");
@@ -731,10 +741,12 @@ void session(bool resetWifi) {
     esp_task_wdt_delete(nullptr);
   }
 
-  // Ends when idle, 4 s after the last upload (the batch is done) or 30 s after a settings change.
+  // Ends when idle, 4 s after the last upload (the batch is done), 30 s after a settings change or 2 s
+  // after the page was closed.
   lastActivity = millis();
   uint32_t up = millis();
-  while (millis() - lastActivity < (changed ? 30000 : SESSION_MS) && !(uploaded && millis() - lastUpload > 4000)) {
+  while (millis() - lastActivity < (changed ? 30000 : SESSION_MS) && !(uploaded && millis() - lastUpload > 4000) &&
+         !(byeAt && millis() - byeAt > 2000)) {
     server.handleClient();
     delay(2);
     if (toUpdater) {
