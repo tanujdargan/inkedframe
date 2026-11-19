@@ -277,6 +277,26 @@ bool showFile(const String &path) {
   return true;
 }
 
+// Text k times larger than the font. setTextSize() turns each font pixel into a k x k block; this
+// samples the glyphs smoothly instead, so curves stay curves.
+void drawBig(Adafruit_GFX &g, const GFXfont &f, const char *s, int x, int y, int k, uint16_t color) {
+  for (; *s; s++) {
+    const GFXglyph &q = f.glyph[*s - f.first];
+    auto ink = [&](int gx, int gy) {
+      int i = gy * q.width + gx;
+      return gx >= 0 && gy >= 0 && gx < q.width && gy < q.height ? f.bitmap[q.bitmapOffset + i / 8] >> (7 - i % 8) & 1 : 0;
+    };
+    for (int py = 0; py < q.height * k; py++)
+      for (int px = 0; px < q.width * k; px++) {
+        float fx = (px + 0.5f) / k - 0.5f, fy = (py + 0.5f) / k - 0.5f, ax = fx - floorf(fx), ay = fy - floorf(fy);
+        int x0 = floorf(fx), y0 = floorf(fy);
+        float v = (ink(x0, y0) * (1 - ax) + ink(x0 + 1, y0) * ax) * (1 - ay) + (ink(x0, y0 + 1) * (1 - ax) + ink(x0 + 1, y0 + 1) * ax) * ay;
+        if (v >= 0.5f) g.drawPixel(x + q.xOffset * k + px, y + q.yOffset * k + py, color);
+      }
+    x += q.xAdvance * k;
+  }
+}
+
 // The "Today" page: day number, weekday, month and year, and the moon's phase.
 void drawToday(Adafruit_GFX &g, time_t t) {
   tm d;
@@ -290,8 +310,7 @@ void drawToday(Adafruit_GFX &g, time_t t) {
   g.setTextSize(6);
   snprintf(s, sizeof s, "%d", d.tm_mday);
   g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  g.setCursor(230 - w / 2 - x1, 300);
-  g.print(s);
+  drawBig(g, FreeSansBold24pt7b, s, 230 - w / 2 - x1, 300, 6, GxEPD_RED);
   g.setTextSize(1);
   g.setTextColor(GxEPD_BLACK);
   strftime(s, sizeof s, "%A", &d);
