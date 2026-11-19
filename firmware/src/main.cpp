@@ -480,6 +480,7 @@ bool flat() {
   Serial.printf("battery %u mV%s\n", mv, was ? ", flat" : "");
   if (was && mv < CHARGED_MV) return true;
   if (!mv || mv >= LOW_BATTERY_MV) return false;
+  prefs.putUChar("screen", 1);  // before the refresh too, in case the cell gives out during it
   paint(drawFlat);
   prefs.putUChar("screen", 1);
   return true;

@@ -245,7 +245,8 @@ pick.onchange = async e => {
       msg.textContent = `Sending photo ${i + 1} of ${files.length}…`;
       await send(files[i]);
     }
-    msg.textContent = 'Sent. The frame takes about half a minute to change.';
+    msg.textContent = month.value && day.value ? `Saved for ${day.value} ${MONTHS[month.value - 1]}. Until then the frame keeps its picture.`
+      : 'Sent. The frame takes about half a minute to change.';
   } catch (err) {
     msg.textContent = err.message == 'full' ? 'The frame is full of kept photos. Delete one under "Photos on the frame" first.'
       : 'That did not work. Press the button on the frame and try again.';
