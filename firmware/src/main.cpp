@@ -144,10 +144,14 @@ static_assert(untilHalfPastMidnight(1800) == 86400 && untilHalfPastMidnight(0) =
 
 // NTP, then the UTC offset when the time zone is automatic. Wi-Fi must be up.
 bool syncClock() {
-  uint32_t deadline = millis() + 10000;  // lwIP waits a random 0-5 s before its first NTP request
-  configTime(0, 0, "pool.ntp.org");
+  // lwIP waits a random 0-5 s before its first NTP request and only retries after 15 s, so one lost
+  // reply used to cost the day's sync (seen on 3 of 25 wakes). Ask again ourselves at 6 s.
+  uint32_t start = millis();
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  bool asked = false;
   while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
-    if (millis() > deadline) return false;
+    if (millis() - start > 12000) return false;
+    if (!asked && millis() - start > 6000) { asked = true; sntp_restart(); }
     delay(50);
   }
   if (prefs.getInt("tz", AUTO_TZ) == AUTO_TZ) {
