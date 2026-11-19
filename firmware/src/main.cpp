@@ -677,13 +677,13 @@ void setup() {
   } else {
     // Button still down 5 s after it woke us means "forget Wi-Fi". Count from boot, not from here: the
     // chip and file system take a moment to start, and people release at about 5 s.
-    uint32_t t = 0;
-    while (cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW && millis() - t < HOLD_RESET_MS) delay(20);
-    if (cause == ESP_SLEEP_WAKEUP_EXT0) Serial.printf("button released or held at %lu ms\n", millis());
+    while (cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW && millis() < HOLD_RESET_MS) delay(20);
+    bool held = cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW;  // still down at 5 s
+    if (cause == ESP_SLEEP_WAKEUP_EXT0) Serial.printf("button %s at %lu ms\n", held ? "held" : "released", millis());
 #ifdef TEST_FORGET_WIFI  // bench only: behave as if the button had been held
-    t = millis() - HOLD_RESET_MS;
+    held = true;
 #endif
-    session(millis() - t >= HOLD_RESET_MS);
+    session(held);
   }
   sleepNow();
 }
