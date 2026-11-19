@@ -149,18 +149,20 @@ const ASLEEP = 'The frame has gone to sleep. Press the button on the frame, then
 const ctx = view.getContext('2d', { willReadFrequently: true });
 
 const look = document.getElementById('look'), ink = document.getElementById('ink');
+const treat = () => look.querySelector(':checked').value;
 try {
-  const t = localStorage.getItem('look')?.split(',');
-  if (t) { look.elements.treat.value = t[0]; ink.value = t[1]; }
+  const [t, k] = localStorage.getItem('look').split(',');
+  look.querySelector(`[value=${t}]`).checked = true;
+  ink.value = k;
 } catch (e) {}
-look.onchange = () => { try { localStorage.setItem('look', look.elements.treat.value + ',' + ink.value); } catch (e) {} };
+look.onchange = () => { try { localStorage.setItem('look', treat() + ',' + ink.value); } catch (e) {} };
 
 async function send(file) {
   // Photos from a phone camera are often stored sideways with an EXIF rotation tag.
   const img = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
   const s = Math.max(W / img.width, H / img.height), sw = W / s, sh = H / s;
   ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) * 0.45, sw, sh, 0, 0, W, H);  // fill the frame, crop the rest
-  const px = ctx.getImageData(0, 0, W, H), t = look.elements.treat.value;
+  const px = ctx.getImageData(0, 0, W, H), t = treat();
   const idx = dither(px.data, t, +ink.value || dominantInk(px.data));
   for (let i = 0; i < idx.length; i++) px.data.set(PALETTE[idx[i]], i * 4);
   ctx.putImageData(px, 0, 0);
