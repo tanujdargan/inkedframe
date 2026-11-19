@@ -798,7 +798,7 @@ void session(bool resetWifi) {
       setupShown = true;
       Serial.printf("setup name=%s pop=%s\n", name, pop);
       static char payload[120];
-      snprintf(payload, sizeof payload, "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"ble\"}", name, pop);
+      snprintf(payload, sizeof payload, "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"ble\",\"security\":1}", name, pop);
       esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
       cfg.display_func = [](esp_qrcode_handle_t qr) {
         static const char *const lines[] = {"1. On your phone, install the app", "    \"ESP BLE Provisioning\"",
@@ -924,7 +924,7 @@ void session(bool resetWifi) {
   // after the page was closed.
   lastActivity = millis();
   uint32_t up = millis();
-  while (millis() - lastActivity < (changed ? 30000 : SESSION_MS) && !(uploaded && millis() - lastUpload > 4000) &&
+  while (millis() - lastActivity < (changed ? 5000 : SESSION_MS) && !(uploaded && millis() - lastUpload > 4000) &&
          !(byeAt && millis() - byeAt > 2000)) {
     server.handleClient();
     delay(2);

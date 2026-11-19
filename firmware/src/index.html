@@ -81,6 +81,7 @@
 <details id="photos">
   <summary>Photos on the frame</summary>
   <div id="list"></div>
+  <button id="delsel" type="button" hidden>Delete selected</button>
 </details>
 <details>
   <summary>Advanced</summary>
@@ -265,7 +266,7 @@ form.onsubmit = async e => {
   try {
     const r = await fetch('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) });
     if (!r.ok) throw 0;
-    saved.textContent = 'Saved. The frame redraws in about a minute.';
+    saved.textContent = 'Saved. The frame is updating now, which takes about half a minute. Press its button again to change more.';
   } catch (err) {
     saved.textContent = 'Not saved. Press the button on the frame and try again.';
   }
@@ -297,6 +298,13 @@ async function act(seq, what) {
   const r = await fetch(`/photo?seq=${seq}&do=${what}`, { method: 'POST' });
   if (!r.ok) throw 0;
 }
+delsel.onclick = async () => {
+  const picked = [...list.querySelectorAll('.sel:checked')];
+  if (!confirm(picked.length == 1 ? 'Delete this photo from the frame?' : `Delete these ${picked.length} photos from the frame?`)) return;
+  for (const box of picked)  // one at a time: the frame serves a single request at once
+    try { await act(box.value, 'delete'); box.closest('.ph').remove(); } catch (e) { msg.textContent = ASLEEP; break; }
+  delsel.hidden = !list.querySelector('.sel:checked');
+};
 photos.ontoggle = async () => {
   if (!photos.open || list.childElementCount) return;
   if (!stored.length) list.textContent = 'No photos yet.';
@@ -308,18 +316,20 @@ photos.ontoggle = async () => {
     row.className = 'ph';
     c.width = 200; c.height = 120;
     c.setAttribute('aria-label', `Photo ${seq}`);
-    const show = document.createElement('button'), del = document.createElement('button');
-    show.textContent = 'Show now'; del.textContent = 'Delete';
+    const show = document.createElement('button'), sel = document.createElement('label');
+    show.textContent = 'Show now';
+    sel.innerHTML = '<input type="checkbox" class="sel"> Select';
+    sel.firstChild.value = seq;
+    sel.firstChild.onchange = () => delsel.hidden = !list.querySelector('.sel:checked');
     const keep = document.createElement('label');
     keep.innerHTML = '<input type="checkbox"> Keep';
     const box = keep.firstChild;
     box.checked = meta & 0x8000;
     const pin = meta & 0x7fff;
     if (pin) keep.textContent = `Shown on ${pin % 100} ${MONTHS[(pin / 100 | 0) - 1]}`;
-    row.append(c, show, del, keep);
+    row.append(c, show, sel, keep);
     list.append(row);
     show.onclick = () => act(seq, 'show').then(() => show.textContent = 'Shown when you close this page', () => show.textContent = 'Failed');
-    del.onclick = () => confirm('Delete this photo from the frame?') && act(seq, 'delete').then(() => row.remove(), () => del.textContent = 'Failed');
     box.onchange = () => act(seq, box.checked ? 'keep' : 'unkeep').catch(() => box.checked = !box.checked);
     try {
       const r = await fetch(`/photo?seq=${seq}`);
