@@ -47,7 +47,8 @@ const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
 const uint32_t SESSION_MS = SESSION_SECONDS * 1000UL;  // upload window after a button press
 const uint32_t SETUP_MS = 600000;      // how long Bluetooth setup stays open
 const uint32_t HOLD_RESET_MS = 5000;
-const uint16_t LOW_BATTERY_MV = 3400;  // tune to the cell; below this the frame stops rotating
+// Tune to the cell. Below LOW: one "please charge me" screen, then no refreshes until above CHARGED.
+const uint16_t WARN_BATTERY_MV = 3550, LOW_BATTERY_MV = 3400, CHARGED_MV = 3900;
 const uint32_t WIFI_TIMEOUT_MS = 20000;
 const int AUTO_TZ = 9999;              // "tz" setting: minutes east of UTC, or this for "look it up"
 const size_t MAX_JPEG = 600 * 1024;
@@ -71,6 +72,7 @@ uint32_t lastActivity, lastUpload;
 bool uploaded, changed, toUpdater;
 bool pending;  // a new firmware from the updater that has not yet proved itself
 bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
+bool lowBattery;  // draw a small battery sign on the picture
 
 const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
 
@@ -164,8 +166,33 @@ void displayBegin() {
   display.setFullWindow();
 }
 
-// Today's date in black on white, so it reads over any picture. Drawn on every page of the refresh.
-void drawDate() {
+#if ROTATE_SECONDS < 86400  // bench builds: GET /render draws into memory instead, to look at it on a computer
+GFXcanvas16 *canvas;
+#endif
+
+// One refresh. GxEPD2 draws a quarter of the panel at a time, so draw() runs once per quarter.
+template <class F> void paint(F draw) {
+#if ROTATE_SECONDS < 86400
+  if (canvas) return draw(*canvas);
+#endif
+  displayBegin();
+  display.firstPage();
+  do draw(display); while (display.nextPage());
+  display.hibernate();
+  panelOff();
+}
+
+void drawBattery(Adafruit_GFX &g) {  // top right: an almost empty battery
+  if (!lowBattery) return;
+  g.fillRect(W - 84, 16, 68, 40, GxEPD_WHITE);
+  g.drawRect(W - 76, 24, 46, 24, GxEPD_BLACK);
+  g.drawRect(W - 75, 25, 44, 22, GxEPD_BLACK);
+  g.fillRect(W - 30, 30, 6, 12, GxEPD_BLACK);
+  g.fillRect(W - 72, 28, 9, 16, GxEPD_RED);
+}
+
+// Today's date in black on white, so it reads over any picture.
+void drawDate(Adafruit_GFX &display) {
   int mode = prefs.getUChar("date", 0);
   time_t t = localNow();
   if (!mode || !clockSet()) return;
@@ -221,22 +248,20 @@ bool showFile(const String &path) {
   File f = LittleFS.open(path);
   if (!f || f.size() != PHOTO_BYTES) return false;
   Serial.printf("show %s\n", path.c_str());
-  displayBegin();
-  static uint8_t rows[W];  // three rows: 800 is not a multiple of 3, but 3 x 800 is
-  display.firstPage();
-  do {
+  paint([&](Adafruit_GFX &g) {
+    static uint8_t rows[W];  // three rows: 800 is not a multiple of 3, but 3 x 800 is
     f.seek(0);
     for (int y = 0; y < H; y += 3) {
       f.read(rows, sizeof rows);
       for (int i = 0; i < 3 * W; i++) {
         uint8_t b = rows[i / 3], c = i % 3 == 0 ? b / 36 : i % 3 == 1 ? b / 6 % 6 : b % 6;
-        display.drawPixel(i % W, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
+        g.drawPixel(i % W, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
       }
     }
-    drawDate();
-  } while (display.nextPage());
-  display.hibernate();
-  panelOff();
+    drawDate(g);
+    drawBattery(g);
+  });
+  prefs.putUChar("flat", 0);  // a picture has replaced the "plug me in" screen
   return true;
 }
 
@@ -248,9 +273,7 @@ bool showPhoto(uint32_t seq) {
 
 // A plain text screen, optionally with a QR code on the right.
 void showText(const char *title, const char *const *lines, int n, esp_qrcode_handle_t qr = nullptr) {
-  displayBegin();
-  display.firstPage();
-  do {
+  paint([&](Adafruit_GFX &display) {
     display.fillScreen(GxEPD_WHITE);
     display.setTextColor(GxEPD_BLACK);
     display.setFont(&FreeSansBold18pt7b);
@@ -267,9 +290,7 @@ void showText(const char *title, const char *const *lines, int n, esp_qrcode_han
         for (int x = 0; x < size; x++)
           if (esp_qrcode_get_module(qr, x, y)) display.fillRect(x0 + x * px, y0 + y * px, px, px, GxEPD_BLACK);
     }
-  } while (display.nextPage());
-  display.hibernate();
-  panelOff();
+  });
 }
 
 // ---------- power ----------
@@ -324,12 +345,37 @@ uint16_t batteryMv() {  // 0 if absent
 
 // ---------- timer wake: next photo, no radio ----------
 
+void drawFlat(Adafruit_GFX &g) {
+  g.fillScreen(GxEPD_WHITE);
+  g.setTextColor(GxEPD_BLACK);
+  g.setFont(&FreeSansBold24pt7b);
+  g.setCursor(60, 150);
+  g.print("Please plug me in");
+  g.setFont(&FreeSansBold18pt7b);
+  g.setCursor(60, 230);
+  g.print("with the USB-C cable.");
+  g.setCursor(60, 310);
+  g.print("I'll be back once I'm charged.");
+}
+
+// A refresh on a flat cell can brown out half-drawn. So at LOW the frame asks once to be charged, then
+// keeps that screen without waking the panel or the radio until the cell is above CHARGED.
+bool flat() {
+  uint16_t mv = batteryMv();  // 0: no gauge
+  lowBattery = mv && mv < WARN_BATTERY_MV;
+  bool was = prefs.getUChar("flat", 0);
+  Serial.printf("battery %u mV%s\n", mv, was ? ", flat" : "");
+  if (was && mv < CHARGED_MV) return true;
+  if (!mv || mv >= LOW_BATTERY_MV) return false;
+  paint(drawFlat);
+  prefs.putUChar("flat", 1);
+  return true;
+}
+
 void rotate() {
   uint32_t seqs[MAX_PHOTOS + 1];
   int n = listPhotos(seqs);
   if (n < (prefs.getUChar("date", 0) ? 1 : 2)) return;  // nothing to rotate to (with the date on, redraw even one)
-  uint16_t mv = batteryMv();
-  if (mv && mv < LOW_BATTERY_MV) return;  // a refresh on a flat cell can brown out half-drawn; keep the picture
   uint32_t cur = prefs.getUInt("cur", 0), next = seqs[n - 1];
   for (int i = n - 1; i >= 0; i--)
     if (seqs[i] < cur) { next = seqs[i]; break; }  // step to the next older, wrap to newest
@@ -487,8 +533,6 @@ bool fetchArt(uint32_t deadline) {
 // ---------- timer wake with the date or artwork on: one short Wi-Fi visit a day ----------
 
 void daily() {
-  uint16_t mv = batteryMv();
-  if (mv && mv < LOW_BATTERY_MV) return;
   uint32_t deadline = millis() + 30000;  // a dead router or internet must not keep the frame awake
   Serial.printf("kept clock %ld\n", (long)time(nullptr));
   radioOff = false;
@@ -653,6 +697,25 @@ void session(bool resetWifi) {
     else server.send(404);
   });
 #endif
+#if ROTATE_SECONDS < 86400
+  server.on("/render", HTTP_GET, [] {  // bench: what the panel would show, packed like a photo
+    canvas = new GFXcanvas16(W, H);
+    uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
+    lowBattery = server.hasArg("low");
+    if (server.arg("w") == "flat") paint(drawFlat);
+    else showFile(photoPath(server.arg("seq").toInt()));
+    for (int i = 0; i < W * H; i++) {
+      int k = 1;
+      for (int j = 0; j < 6; j++)
+        if (COLORS[j] == canvas->getBuffer()[i]) k = j;
+      out[i / 3] = (i % 3 ? out[i / 3] * 6 : 0) + k;
+    }
+    server.send_P(200, "application/octet-stream", (const char *)out, PHOTO_BYTES);
+    free(out);
+    delete canvas;
+    canvas = nullptr;
+  });
+#endif
   server.on("/updater", HTTP_POST, [] {  // restart into the updater app in the other slot
     toUpdater = !esp_ota_set_boot_partition(esp_ota_get_next_update_partition(nullptr));
     server.send(toUpdater ? 200 : 500, "text/plain", toUpdater ? "restarting into the updater" : "no updater installed");
@@ -730,7 +793,7 @@ void setup() {
   LittleFS.remove("/up.tmp");
 
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-    online() ? daily() : rotate();
+    if (!flat()) online() ? daily() : rotate();
   } else {
     // Button still down 5 s after it woke us means "forget Wi-Fi". Count from boot, not from here: the
     // chip and file system take a moment to start, and people release at about 5 s.
