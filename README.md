@@ -2,7 +2,7 @@
 
 # inkedframe
 
-inkedframe is an open-source battery photo frame, designed to be built and given as a gift. It uses an Adafruit Feather ESP32-S3 (4 MB flash, 2 MB PSRAM, product 5477), a Waveshare 7.3" Spectra 6 (E6) colour e-ink panel (800x480, six inks) and a 2000 mAh LiPo cell. There is no cloud, no account and no app for daily use. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off.
+inkedframe is an open-source battery photo frame, designed to be built and given as a gift. It uses an Adafruit Feather ESP32-S3 (4 MB flash, 2 MB PSRAM, product 5477), a Waveshare 7.3" Spectra 6 (E6) colour e-ink panel (800x480, six inks) and a 2000 mAh LiPo cell. There is no cloud, no account and no app for daily use. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off. Optionally it can print today's date on the picture, or show a different random photograph from the internet each day.
 
 ## How it is used
 
@@ -10,10 +10,19 @@ The person receiving the frame does a one-time setup. The frame draws a QR code 
 
 To add photos, they press the button on the frame, then open `http://frame.local` on a phone or laptop on the same Wi-Fi, and choose one or more photos. Once uploads stop for a few seconds the frame shows the newest photo and sleeps. After that it changes photo by itself once a day, cycling through the stored ones. When there are already 10 photos, a new upload removes the oldest.
 
+The upload page also has a small settings form (saved on the frame, kept across power loss):
+
+- **Show**: "My photos" (default) or "Random artwork", a new random landscape-format photograph every day instead of the stored photos.
+- **Date**: Off (default), Corner (a short date such as "Thu 19 Nov" in the bottom right corner), Banner (a white strip along the bottom with the weekday and full date) or Big (a large day number with the month and weekday, bottom left). The date is black on a white box so it can be read over any picture.
+- **Time zone**: Automatic (default: looked up from the frame's internet address each day) or a fixed UTC offset.
+- **Unsplash access key** (optional): with a free key from unsplash.com/developers, Random artwork asks Unsplash for a landscape photo instead of using Lorem Picsum.
+
+After Save, the frame redraws about a minute later with the new settings. The page also shows the battery charge in percent.
+
 The button does two things:
 
 - Press it: wake the frame and open the upload page for a few minutes.
-- Hold it for 5 seconds after waking: forget the stored Wi-Fi and restart Bluetooth setup (for a new router or a new home).
+- Hold it for 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and restart Bluetooth setup (for a new router or a new home). When held at wake, the 5 seconds count from the moment the frame wakes.
 
 ## Parts and wiring
 
@@ -62,12 +71,19 @@ Everything happens in `setup()`, then the chip goes back to deep sleep. What hap
 
 | Wake cause | What the frame does |
 | --- | --- |
-| Timer (every 24 hours) | Shows the next older stored photo, wrapping to the newest. Radio stays off. Does nothing with fewer than 2 photos or when the battery is below 3.4 V. |
-| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes, stores uploads, and shows the newest photo 4 seconds after the last upload. |
+| Timer (every 24 hours), Date off and My photos | Shows the next older stored photo, wrapping to the newest. Radio stays off. Does nothing with fewer than 2 photos or when the battery is below 3.4 V. |
+| Timer (00:30 local time), Date on or Random artwork | Joins Wi-Fi, sets the clock by NTP (`pool.ntp.org`) and, for Automatic time zone, looks up the UTC offset at `http://ip-api.com`. Then fetches the day's artwork or steps to the next photo, and draws it with the date. Does nothing when the battery is below 3.4 V. |
+| Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (30 seconds after a settings change), stores uploads and settings, and shows the newest photo 4 seconds after the last upload. |
 | Button held 5 seconds | Forgets the stored Wi-Fi and runs Bluetooth setup again. |
 | No Wi-Fi stored | Runs Bluetooth setup and draws the QR code on the panel. Setup stays open for 10 minutes. |
 
 If Wi-Fi does not connect within 20 seconds the frame gives up and keeps the current picture. A wrong password makes it forget the network and offer setup again.
+
+### Date and artwork
+
+The chip's deep-sleep timer runs from an internal RC oscillator that can drift by a percent or two, tens of minutes a day. So when the date or artwork is on, each wake re-syncs the clock and sleeps until 00:30 local time. If it wakes and the synced clock says it is still the evening before, it sleeps the remainder instead of drawing yesterday's date. If Wi-Fi or NTP fails, it uses its own clock (which keeps running through deep sleep), draws anyway and tries again the next day. Every network step has a timeout, so a dead router costs about 10 seconds awake and a dead internet connection under 30. The time zone lookup is cached, so a failed lookup uses the last known offset.
+
+Random artwork is fetched as one JPEG a day over HTTPS, decoded with the JPEG decoder in the ESP32-S3's ROM, cropped to 800x480, dithered on the frame with the same palette, saturation, contrast and Floyd-Steinberg steps as the upload page, and saved as `/art.bin` (not one of the 10 photos). Lorem Picsum and Unsplash only serve progressive JPEGs, which the ROM decoder cannot read, so the image is fetched through the free image proxy [wsrv.nl](https://wsrv.nl), which re-encodes it as a baseline JPEG. If anything fails (no network, a bad key, a JPEG it cannot decode) the frame keeps the picture it has. Decoding and dithering take about 7 seconds at 80 MHz and use the PSRAM for the full frame.
 
 ### Photo format
 
@@ -94,6 +110,10 @@ These figures were measured on the bench with a Nordic PPK2 at 3.8 V on the batt
 | Deep sleep | 22 uA |
 | One photo rotation (a ~30 s colour refresh) | about 0.5 mAh |
 | Upload session, while the page is being served | about 95 mA |
+| Daily wake, Date on, My photos (Wi-Fi, NTP, time zone lookup, refresh) | 0.66 mAh, 38 s awake |
+| Daily wake, Random artwork (also download, decode, dither) | 1.26 mAh, 51 s awake |
+
+For comparison, a radio-off rotation measured 0.42 mAh in the same session as the two rows above. So the date costs about 0.24 mAh a day (about 90 mAh a year) and Random artwork about 0.8 mAh a day (about 300 mAh a year) on top of the plain rotation. Both add one Wi-Fi connection a day, and the frame wakes at the same time each night instead of every 24 hours from the last wake.
 
 At 95 mA, the full 3-minute upload window costs about 5 mAh, and a typical quick upload about 2 mAh.
 
@@ -105,6 +125,8 @@ Estimate for one year, using the figures above:
 | One rotation per day | ~180 mAh |
 | One upload session per week | ~260 mAh |
 | Total | ~630 mAh |
+| Total with Date on | ~720 mAh |
+| Total with Random artwork | ~930 mAh |
 
 LiPo self-discharge (not measured, typically a few percent a month) comes on top. A 2000 mAh cell should comfortably pass a year. This is an estimate from bench measurements, not a year-long test.
 
@@ -118,6 +140,9 @@ One non-obvious finding: the panel's control lines must be held low whenever the
 - `frame.local` needs mDNS: iPhone, Mac, Windows 10 and later, Android 12 and later. The setup-complete screen also shows the frame's IP address as a fallback.
 - Landscape only. Photos are centre-cropped to 800x480.
 - The frame stops rotating when the battery is below 3.4 V, to avoid a half-drawn refresh on a flat cell.
+- Random artwork depends on three free outside services: Lorem Picsum (or Unsplash with a key), and wsrv.nl to convert the JPEG. Lorem Picsum photos are random Unsplash photos of any subject, not only landscapes. If a service changes or goes away, the frame keeps showing the last picture.
+- The HTTPS connections for artwork do not check certificates (a CA bundle would not fit comfortably in flash). The pictures are public, but the optional Unsplash key is sent over such a connection, so someone able to intercept the frame's traffic could read it. Use a free key you do not mind losing. The key is also visible to anyone who opens the upload page.
+- The date and time zone lookups need the internet; with no internet the frame uses its own clock, which loses the time after a power loss (no date is drawn until it has synced again).
 
 ## Credits
 
