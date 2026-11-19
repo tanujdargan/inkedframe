@@ -3,7 +3,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light">
-<script>try { document.documentElement.dataset.theme = localStorage.getItem('theme') == 'dark' ? 'dark' : 'light'; } catch (e) { document.documentElement.dataset.theme = 'light'; }</script>
+<script>
+// The panel takes about half a minute to redraw and the frame cannot answer meanwhile: count it down.
+function countdown(p, secs) {
+  const base = p.textContent, t = setInterval(() => {
+    p.textContent = --secs > 0 ? `${base} About ${secs} seconds to go.` : 'The frame should show it now. Press its button again to change more.';
+    if (secs <= 0) clearInterval(t);
+  }, 1000);
+}
+try { document.documentElement.dataset.theme = localStorage.getItem('theme') == 'dark' ? 'dark' : 'light'; } catch (e) { document.documentElement.dataset.theme = 'light'; }</script>
 <title>Photo frame</title>
 <style>
 /* Direction 3, editorial print: paper white, black ink, SF Mono caps, hard edges, one electric blue. */
@@ -660,6 +668,7 @@ async function send() {
     $('#sentT').textContent = pin ? `Saved for ${pinLabel()}` : n > 1 ? `Sent ${n} photos` : 'Sent';
     $('#sentP').textContent = pin ? `On ${pinLabel()} every year the frame shows ${n > 1 ? 'the last of these photos' : 'this photo'}. Until then it keeps its current picture.`
       : 'The frame is changing, about half a minute.';
+    if (!pin) countdown($('#sentP'), 45);
     $('#sentMat').classList.toggle('flash', !pin);
     screen('sent');
     $('#sentT').focus();
@@ -730,6 +739,7 @@ async function save() {
   try {
     await api('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) }, 10000);
     out.innerHTML = `<div class="note ok">${ic('check')}<div><strong>Saved</strong><p>The frame is updating now, about half a minute. Press its button again to change more.</p></div></div>`;
+    countdown(out.querySelector('p'), form.show && form.show.value == 1 ? 60 : 45);
     finished = true;
     setAsleep(true);
   } catch (e) {

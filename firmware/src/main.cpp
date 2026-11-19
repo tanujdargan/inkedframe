@@ -82,6 +82,15 @@ const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
 // A colour refresh takes about 30 s. Doze instead of spinning the CPU while the panel is busy.
 DNSServer *setupDns;
 WebServer *setupWeb;
+volatile bool pressed;  // the button was pressed while the frame was busy drawing
+
+// The onboard light: green while the page can be opened, amber while drawing, blue in Wi-Fi setup,
+// off asleep. Dim on purpose: about 1 mA against the 90 mA the frame draws awake anyway.
+void led(uint8_t r, uint8_t g, uint8_t b) {
+  digitalWrite(NEOPIXEL_POWER, NEOPIXEL_POWER_ON);
+  delay(2);
+  neopixelWrite(PIN_NEOPIXEL, r, g, b);
+}
 
 void whilePanelBusy(const void *) {
   if (!radioOff) {
@@ -92,11 +101,15 @@ void whilePanelBusy(const void *) {
     delay(10);
     return;
   }
+  if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
+  if (!pressed) gpio_wakeup_enable(BUTTON, GPIO_INTR_LOW_LEVEL);  // a press is remembered, see sleepNow()
   esp_sleep_enable_gpio_wakeup();
   esp_sleep_enable_timer_wakeup(1000000);
   esp_light_sleep_start();
+  if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_disable(GPIO_NUM_5);
+  gpio_wakeup_disable(BUTTON);
 }
 
 // ---------- photo store: /<8-digit sequence>.bin, highest is newest ----------
@@ -153,11 +166,17 @@ static_assert(untilHalfPastMidnight(1800) == 86400 && untilHalfPastMidnight(0) =
               untilHalfPastMidnight(86400 - 600) == 2400 && untilHalfPastMidnight(86400 + 3600) == 84600, "");
 
 // NTP, then the UTC offset when the time zone is automatic. Wi-Fi must be up.
+void startNtp() {  // ask early (as soon as Wi-Fi is up) so the answer is usually in before anyone waits for it
+  static bool started;
+  if (!started) configTime(0, 0, "pool.ntp.org", "time.google.com");
+  started = true;
+}
+
 bool syncClock() {
   // lwIP waits a random 0-5 s before its first NTP request and only retries after 15 s, so one lost
   // reply used to cost the day's sync (seen on 3 of 25 wakes). Ask again ourselves at 6 s.
   uint32_t start = millis();
-  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  startNtp();
   bool asked = false;
   while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
     if (millis() - start > 12000) return false;
@@ -193,6 +212,8 @@ void panelOff() {
 }
 
 void displayBegin() {
+  pressed = false;
+  led(14, 7, 0);
   for (uint8_t pin : PANEL_PINS) gpio_hold_dis((gpio_num_t)pin);
   display.init(0, true, 2, false);
   display.epd2.setBusyCallback(whilePanelBusy);
@@ -447,6 +468,12 @@ uint16_t batteryMv() {  // 0 if absent
     esp_ota_mark_app_invalid_rollback_and_reboot();
     ESP.restart();  // the boot loader rolls back a pending image on any restart
   }
+  if (pressed) {  // pressed while drawing, when the frame could not answer: open the page now instead of sleeping
+    Serial.println("button was pressed while drawing: new session");
+    Serial.flush();
+    while (digitalRead(BUTTON) == LOW) delay(20);  // GPIO0 is a boot strapping pin: never restart while it is down
+    ESP.restart();
+  }
   uint64_t secs = ROTATE_SECONDS;
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilHalfPastMidnight(localNow() % 86400);
@@ -678,6 +705,7 @@ bool fetchArt(uint32_t deadline) {
     j.oy = (sh - j.ch) * 45 / 100;  // same crop as the upload page
     j.rgb = (uint8_t *)ps_malloc(W * H * 3);
     if (j.rgb) memset(j.rgb, 255, W * H * 3);  // white under the label
+    setCpuFrequencyMhz(240);  // decoding and dithering are the slow part: full speed, then back to 80
     r = j.rgb ? jd_decomp(&jd, jpegOut, scale) : JDR_MEM1;
     ok = r == JDR_OK;
   }
@@ -685,6 +713,7 @@ bool fetchArt(uint32_t deadline) {
   free(work);
   free(jpg);
   ok = ok && ditherToFile(j.rgb, "/art.bin");
+  setCpuFrequencyMhz(80);
   if (ok) prefs.putString("label", label);
   free(j.rgb);
   Serial.printf("art: %s at %lu ms\n", ok ? "saved" : "failed, keeping the current picture", millis() - t0);
@@ -842,6 +871,7 @@ bool wifiSetup() {  // true once the frame has joined the home network
     showText("Connect me to Wi-Fi", lines, 6, qr);
   };
   esp_qrcode_generate(&cfg, qrText);
+  led(0, 0, 14);
 
   uint32_t start = millis();
   while (millis() - start < SETUP_MS && !(gotIp && state != 1)) {
@@ -899,6 +929,7 @@ void session(bool resetWifi) {
   }
   Serial.printf("ip %s\n", WiFi.localIP().toString().c_str());
   WiFi.setSleep(true);  // modem sleep between beacons: about a third of the idle current
+  startNtp();
 
   if (setupShown) {
     static char ipLine[48];
@@ -997,6 +1028,7 @@ void session(bool resetWifi) {
     server.send(200, "text/plain", "ok");
   });
   server.begin();
+  led(0, 12, 0);
   Serial.println("serving");
   if (pending) {  // joined Wi-Fi and serving: the new firmware is good
     confirmFirmware();
