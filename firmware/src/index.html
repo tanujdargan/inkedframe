@@ -13,6 +13,10 @@
   #look > label { display: inline-block; margin: 0 14px 10px 0; color: #222; font-size: 18px; }
   #look #inkrow { display: none; width: 100%; margin: 0; color: #555; font-size: 16px; }
   #look:has([value=duotone]:checked) #inkrow { display: block; }
+  #pinbox { margin: 0 0 20px; }
+  #pinbox label { display: block; margin-top: 10px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { margin: 4px 0; }
   #pick { position: absolute; opacity: 0; width: 1px; height: 1px; }
   canvas { width: 100%; height: auto; border-radius: 8px; margin-top: 20px; display: none; }
   #msg { min-height: 1.5em; margin: 20px 0 0; }
@@ -20,7 +24,7 @@
   form { text-align: left; margin-top: 36px; }
   h2 { font-size: 20px; margin: 0 0 8px; }
   form label { display: block; margin-top: 14px; font-size: 16px; color: #555; }
-  select, #key, #ink { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 18px; color: #222; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
+  select, input:not([type]) { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 18px; color: #222; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
   button.btn { width: 100%; margin-top: 20px; border: 0; font: inherit; font-size: 20px; }
   #saved { min-height: 1.5em; margin: 12px 0 0; text-align: center; }
   details { text-align: left; margin-top: 36px; color: #555; font-size: 16px; }
@@ -41,6 +45,15 @@
     <select id="ink"><option value="">Automatic</option><option value="3">Red</option><option value="4">Blue</option><option value="2">Yellow</option><option value="5">Green</option></select>
   </label>
 </fieldset>
+<details id="pinbox">
+  <summary>Show on a date (optional)</summary>
+  <p class="hint">Shown on this day every year instead of the usual picture.</p>
+  <div class="two">
+    <label>Month <select id="month"><option value="">–</option></select></label>
+    <label>Day <select id="day"><option value="">–</option></select></label>
+  </div>
+  <label>Greeting on the photo <input id="greet" maxlength="40" placeholder="Happy birthday!"></label>
+</details>
 <label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
 <p id="msg" role="status" aria-live="polite"></p>
 <canvas id="view" width="800" height="480" aria-label="Preview of the photo as the frame will show it"></canvas>
@@ -138,6 +151,10 @@ function dominantInk(rgba) {
   }
   return +Object.keys(score).reduce((x, y) => score[y] > score[x] ? y : x);
 }
+// Text drawn after dithering stays crisp: idx becomes ink wherever the rendered text (rgba) is solid.
+function stamp(idx, rgba, ink) {
+  for (let i = 0; i < idx.length; i++) if (rgba[i * 4 + 3] >= 128) idx[i] = ink;
+}
 // Three pixels per byte, first pixel most significant: a*36 + b*6 + c.
 function pack(idx) {
   const out = new Uint8Array(idx.length / 3);
@@ -159,6 +176,31 @@ try {
 } catch (e) {}
 look.onchange = () => { try { localStorage.setItem('look', treat() + ',' + ink.value); } catch (e) {} };
 
+const month = document.getElementById('month'), day = document.getElementById('day'), greet = document.getElementById('greet');
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+MONTHS.forEach((m, i) => month.add(new Option(m, i + 1)));
+for (let d = 1; d <= 31; d++) day.add(new Option(d, d));
+
+// The greeting goes in a white band across the top, in red, drawn as text after dithering.
+function band(idx) {
+  const lines = [[greet.value.trim(), 'bold', 56, 3]].filter(l => l[0]);
+  if (!lines.length) return;
+  const c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
+  c.width = W; c.height = H;
+  x.textAlign = 'center'; x.textBaseline = 'top';
+  const font = (style, size) => x.font = `${style} ${size}px system-ui, -apple-system, sans-serif`;
+  for (const l of lines) while (font(l[1], l[2]), x.measureText(l[0]).width > W - 60 && l[2] > 12) l[2]--;
+  let y = 24;
+  idx.fill(1, 0, (y + lines.reduce((h, l) => h + l[2] * 1.25, 0) + 12 | 0) * W);
+  for (const [text, style, size, ink] of lines) {
+    font(style, size);
+    x.clearRect(0, 0, W, H);
+    x.fillText(text, W / 2, y);
+    stamp(idx, x.getImageData(0, 0, W, H).data, ink);
+    y += size * 1.25 | 0;
+  }
+}
+
 async function send(file) {
   // Photos from a phone camera are often stored sideways with an EXIF rotation tag.
   const img = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
@@ -166,12 +208,14 @@ async function send(file) {
   ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) * 0.45, sw, sh, 0, 0, W, H);  // fill the frame, crop the rest
   const px = ctx.getImageData(0, 0, W, H), t = treat();
   const idx = dither(px.data, t, +ink.value || dominantInk(px.data));
+  band(idx);
   for (let i = 0; i < idx.length; i++) px.data.set(PALETTE[idx[i]], i * 4);
   ctx.putImageData(px, 0, 0);
   view.style.display = 'block';
   const form = new FormData();
   form.append('photo', new Blob([pack(idx)]), 'photo.bin');
-  const r = await fetch('/upload', { method: 'POST', body: form });
+  const pin = month.value && day.value ? `?pin=${month.value * 100 + +day.value}` : '';
+  const r = await fetch('/upload' + pin, { method: 'POST', body: form });
   if (!r.ok) throw new Error(await r.text());
 }
 
@@ -263,6 +307,8 @@ photos.ontoggle = async () => {
     keep.innerHTML = '<input type="checkbox"> Keep';
     const box = keep.firstChild;
     box.checked = meta & 0x8000;
+    const pin = meta & 0x7fff;
+    if (pin) keep.textContent = `Shown on ${pin % 100} ${MONTHS[(pin / 100 | 0) - 1]}`;
     row.append(c, show, del, keep);
     list.append(row);
     show.onclick = () => act(seq, 'show').then(() => show.textContent = 'Shown when you close this page', () => show.textContent = 'Failed');

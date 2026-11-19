@@ -122,7 +122,13 @@ void removePhoto(uint32_t seq) {
 
 // ---------- settings and clock ----------
 
-bool online() { return prefs.getUChar("date", 0) || prefs.getUChar("show", 0); }  // needs Wi-Fi once a day
+bool online() {  // needs Wi-Fi once a day
+  if (prefs.getUChar("date", 0) || prefs.getUChar("show", 0)) return true;
+  uint32_t seqs[MAX_PHOTOS + 1];
+  for (int i = listPhotos(seqs); i--;)
+    if (meta(seqs[i]) & ~KEEP) return true;  // a pinned photo needs the right date
+  return false;
+}
 bool clockSet() { return time(nullptr) > 1700000000; }  // false after a power loss until NTP has run
 
 time_t localNow() {
@@ -194,7 +200,7 @@ template <class F> void paint(F draw) {
   do draw(display); while (display.nextPage());
   display.hibernate();
   panelOff();
-  prefs.putUChar("flat", 0);  // a picture has replaced the "plug me in" screen
+  prefs.putUChar("screen", 0);  // what is on the panel: 0 the usual, 1 "plug me in", 2 a photo pinned to the day
 }
 
 void drawBattery(Adafruit_GFX &g) {  // top right: an almost empty battery
@@ -430,7 +436,7 @@ uint16_t batteryMv() {  // 0 if absent
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilHalfPastMidnight(localNow() % 86400);
 #endif
-  Serial.printf("sleep %u s, awake %lu ms, flat %d\n", (unsigned)secs, millis(), prefs.getUChar("flat", 0));
+  Serial.printf("sleep %u s, awake %lu ms, screen %d\n", (unsigned)secs, millis(), prefs.getUChar("screen", 0));
   Serial.flush();
   server.stop();
   WiFi.disconnect(true);
@@ -469,19 +475,32 @@ void drawFlat(Adafruit_GFX &g) {
 bool flat() {
   uint16_t mv = batteryMv();  // 0: no gauge
   lowBattery = mv && mv < WARN_BATTERY_MV;
-  bool was = prefs.getUChar("flat", 0);
+  bool was = prefs.getUChar("screen", 0) == 1;
   Serial.printf("battery %u mV%s\n", mv, was ? ", flat" : "");
   if (was && mv < CHARGED_MV) return true;
   if (!mv || mv >= LOW_BATTERY_MV) return false;
   paint(drawFlat);
-  prefs.putUChar("flat", 1);
+  prefs.putUChar("screen", 1);
   return true;
+}
+
+uint32_t pinnedToday() {  // the newest photo pinned to today's date, or 0
+  time_t t = localNow();
+  tm d;
+  gmtime_r(&t, &d);
+  uint32_t seqs[MAX_PHOTOS + 1];
+  for (int i = listPhotos(seqs); clockSet() && i--;)
+    if ((meta(seqs[i]) & ~KEEP) == (d.tm_mon + 1) * 100 + d.tm_mday) return seqs[i];
+  return 0;
 }
 
 void rotate() {
   uint32_t seqs[MAX_PHOTOS + 1];
-  int n = listPhotos(seqs);
-  if (n < (prefs.getUChar("date", 0) ? 1 : 2)) return;  // nothing to rotate to (with the date on, redraw even one)
+  int n = 0;
+  for (int i = 0, all = listPhotos(seqs); i < all; i++)
+    if (!(meta(seqs[i]) & ~KEEP)) seqs[n++] = seqs[i];  // pinned photos wait for their day
+  // Nothing to rotate to. With the date on, or after a pinned day, redraw even one.
+  if (n < (prefs.getUChar("date", 0) || prefs.getUChar("screen", 0) ? 1 : 2)) return;
   uint32_t cur = prefs.getUInt("cur", 0), next = seqs[n - 1];
   for (int i = n - 1; i >= 0; i--)
     if (seqs[i] < cur) { next = seqs[i]; break; }  // step to the next older, wrap to newest
@@ -671,14 +690,16 @@ void daily() {
 #if ROTATE_SECONDS == 86400
   if (clockSet() && localNow() % 86400 >= 43200) return;  // woke before midnight: sleepNow() sleeps the rest
 #endif
+  uint32_t pin = pinnedToday();
   int show = prefs.getUChar("show", 0);  // 0 my photos, 1 artwork, 2 today
-  bool art = show == 1, fresh = art && synced && fetchArt(deadline);
+  bool art = show == 1 && !pin, fresh = art && synced && fetchArt(deadline);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  if (show == 2) showToday();
+  if (pin && showFile(photoPath(pin))) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
+  else if (show == 2) showToday();
   else if (!art) rotate();
-  else if (fresh || prefs.getUChar("date", 0)) showFile("/art.bin");  // failed fetch: keep the picture, new date
+  else if (fresh || prefs.getUChar("date", 0) || prefs.getUChar("screen", 0)) showFile("/art.bin");  // failed fetch: keep the picture
 }
 
 // ---------- upload session ----------
@@ -716,7 +737,9 @@ void handleUpload() {
       uint32_t seq = prefs.getUInt("seq", 0) + 1;
       prefs.putUInt("seq", seq);
       uploaded = LittleFS.rename("/up.tmp", photoPath(seq));
-      if (uploaded) showSeq = seq;
+      int pin = server.arg("pin").toInt();  // month * 100 + day
+      if (uploaded && pin % 100 && pin % 100 < 32 && pin > 100 && pin < 1300) prefs.putUShort(metaKey(seq).c_str(), pin);
+      else if (uploaded) showSeq = seq;  // a pinned photo waits for its day
       lastUpload = millis();
       Serial.printf("stored %s, file system %u of %u bytes used\n", photoPath(seq).c_str(), LittleFS.usedBytes(), LittleFS.totalBytes());
     } else {

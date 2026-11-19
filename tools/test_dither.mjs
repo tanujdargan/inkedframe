@@ -4,7 +4,7 @@ import assert from 'node:assert';
 const html = readFileSync(new URL('../firmware/src/index.html', import.meta.url), 'utf8');
 const consts = html.match(/const W = [\s\S]*?const SATURATION[^\n]*\n/)[0];
 const code = html.match(/\/\/ DITHER-BEGIN[\s\S]*?\/\/ DITHER-END/)[0];
-const { dither, pack, dominantInk, PALETTE, W, H } = new Function(consts + code + '\nreturn { dither, pack, dominantInk, PALETTE, W, H };')();
+const { dither, pack, dominantInk, stamp, PALETTE, W, H } = new Function(consts + code + '\nreturn { dither, pack, dominantInk, stamp, PALETTE, W, H };')();
 
 // A solid field of each ink colour must come out almost entirely as that ink
 // (the saturation boost leaves a little error to diffuse, so not exactly 100%).
@@ -36,4 +36,8 @@ PALETTE.slice(2).forEach((rgb, k) => {  // a field of a slightly lighter shade o
   for (let i = 0; i < W * H; i++) rgba.set([...rgb.map(c => Math.min(255, c + 20)), 255], i * 4);
   assert.strictEqual(dominantInk(rgba), k + 2, `dominant ink of ${rgb}`);
 });
+const text = new Uint8ClampedArray(W * H * 4), idx = new Uint8Array(W * H).fill(4);
+text[3] = 255; text[7] = 127;  // first pixel solid, second faint
+stamp(idx, text, 3);
+assert.deepStrictEqual([...idx.subarray(0, 3)], [3, 4, 4], 'stamp sets solid text pixels only');
 console.log('dither ok');
