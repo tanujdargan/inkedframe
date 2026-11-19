@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Photo frame</title>
+<style>
+  body { font: 18px system-ui, sans-serif; margin: 0 auto; padding: 24px 16px; max-width: 520px; text-align: center; color: #222; background: #faf8f4; }
+  h1 { font-size: 26px; margin: 8px 0 24px; }
+  .btn { display: block; padding: 20px; border-radius: 14px; background: #222; color: #fff; font-size: 20px; cursor: pointer; }
+  .btn:focus-within { outline: 3px solid #2157ba; outline-offset: 3px; }
+  input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  canvas { width: 100%; height: auto; border-radius: 8px; margin-top: 20px; display: none; }
+  #msg { min-height: 1.5em; margin: 20px 0 0; }
+  #info { color: #777; font-size: 14px; margin-top: 28px; }
+</style>
+<h1>Photo frame</h1>
+<label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
+<p id="msg" role="status" aria-live="polite"></p>
+<canvas id="view" width="800" height="480" aria-label="Preview of the photo as the frame will show it"></canvas>
+<p id="info"></p>
+<script>
+const W = 800, H = 480;
+// Approximate measured Spectra 6 ink colours, in the order the frame expects:
+// black, white, yellow, red, blue, green. Tune here if a colour looks off on the panel.
+const PALETTE = [[25,30,33],[232,232,232],[239,222,68],[178,19,24],[33,87,186],[53,120,70]];
+const SATURATION = 1.4, CONTRAST = 1.15;
+
+// DITHER-BEGIN (tools/test_dither.mjs runs this block under node)
+// RGBA pixels (W*H*4) -> palette index per pixel (W*H), Floyd-Steinberg.
+function dither(rgba) {
+  const a = new Float32Array(W * H * 3);
+  let mean = 0;
+  for (let i = 0; i < W * H; i++) {
+    const r = rgba[i*4], g = rgba[i*4+1], b = rgba[i*4+2];
+    const grey = 0.299*r + 0.587*g + 0.114*b;
+    a[i*3]   = Math.min(255, Math.max(0, grey + (r - grey) * SATURATION));
+    a[i*3+1] = Math.min(255, Math.max(0, grey + (g - grey) * SATURATION));
+    a[i*3+2] = Math.min(255, Math.max(0, grey + (b - grey) * SATURATION));
+    mean += 0.299*a[i*3] + 0.587*a[i*3+1] + 0.114*a[i*3+2];
+  }
+  mean /= W * H;
+  for (let i = 0; i < a.length; i++) a[i] = Math.min(255, Math.max(0, mean + (a[i] - mean) * CONTRAST));
+  const out = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 3;
+    let best = 0, bestD = Infinity;
+    for (let p = 0; p < PALETTE.length; p++) {
+      const d = (a[i]-PALETTE[p][0])**2 + (a[i+1]-PALETTE[p][1])**2 + (a[i+2]-PALETTE[p][2])**2;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    out[y * W + x] = best;
+    for (let c = 0; c < 3; c++) {
+      const e = a[i+c] - PALETTE[best][c];
+      if (x + 1 < W) a[i + 3 + c] += e * 7/16;
+      if (y + 1 < H) {
+        if (x > 0) a[i + (W-1)*3 + c] += e * 3/16;
+        a[i + W*3 + c] += e * 5/16;
+        if (x + 1 < W) a[i + (W+1)*3 + c] += e * 1/16;
+      }
+    }
+  }
+  return out;
+}
+// Two pixels per byte, first pixel in the high nibble.
+function pack(idx) {
+  const out = new Uint8Array(idx.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = idx[i*2] << 4 | idx[i*2+1];
+  return out;
+}
+// DITHER-END
+
+const msg = document.getElementById('msg'), view = document.getElementById('view');
+const ctx = view.getContext('2d', { willReadFrequently: true });
+
+async function send(file) {
+  const img = await createImageBitmap(file);
+  const s = Math.max(W / img.width, H / img.height), sw = W / s, sh = H / s;
+  ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) * 0.45, sw, sh, 0, 0, W, H);  // fill the frame, crop the rest
+  const px = ctx.getImageData(0, 0, W, H), idx = dither(px.data);
+  for (let i = 0; i < idx.length; i++) px.data.set(PALETTE[idx[i]], i * 4);
+  ctx.putImageData(px, 0, 0);
+  view.style.display = 'block';
+  const form = new FormData();
+  form.append('photo', new Blob([pack(idx)]), 'photo.bin');
+  const r = await fetch('/upload', { method: 'POST', body: form });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+document.getElementById('pick').onchange = async e => {
+  const files = [...e.target.files];
+  try {
+    for (let i = 0; i < files.length; i++) {
+      msg.textContent = `Sending photo ${i + 1} of ${files.length}…`;
+      await send(files[i]);
+    }
+    msg.textContent = 'Sent. The frame takes about half a minute to change.';
+  } catch (err) {
+    msg.textContent = 'That did not work. Press the button on the frame and try again.';
+  }
+  e.target.value = '';
+};
+
+fetch('/status').then(r => r.json()).then(s => {
+  document.getElementById('info').textContent =
+    `${s.photos} of ${s.max} photos stored` + (s.battery_mv ? ` · battery ${(s.battery_mv / 1000).toFixed(2)} V` : '');
+}).catch(() => {});
+</script>
+</html>
