@@ -18,6 +18,8 @@
   select, #key { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 10px; font: inherit; font-size: 18px; color: #222; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
   button.btn { width: 100%; margin-top: 20px; border: 0; font: inherit; font-size: 20px; }
   #saved { min-height: 1.5em; margin: 12px 0 0; text-align: center; }
+  details { text-align: left; margin-top: 36px; color: #555; font-size: 16px; }
+  summary { cursor: pointer; }
 </style>
 <h1>Photo frame</h1>
 <label class="btn">Choose photos<input id="pick" type="file" accept="image/*" multiple></label>
@@ -37,6 +39,12 @@
   <p id="saved" role="status" aria-live="polite"></p>
 </form>
 <p id="info"></p>
+<details>
+  <summary>Advanced</summary>
+  <p>Firmware version: <span id="ver"></span></p>
+  <button class="btn" id="update" type="button">Update firmware</button>
+  <p id="upmsg" role="status" aria-live="polite"></p>
+</details>
 <script>
 const W = 800, H = 480;
 // Approximate measured Spectra 6 ink colours, in the order the frame expects:
@@ -80,10 +88,10 @@ function dither(rgba) {
   }
   return out;
 }
-// Two pixels per byte, first pixel in the high nibble.
+// Three pixels per byte, first pixel most significant: a*36 + b*6 + c.
 function pack(idx) {
-  const out = new Uint8Array(idx.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = idx[i*2] << 4 | idx[i*2+1];
+  const out = new Uint8Array(idx.length / 3);
+  for (let i = 0; i < out.length; i++) out[i] = idx[i*3] * 36 + idx[i*3+1] * 6 + idx[i*3+2];
   return out;
 }
 // DITHER-END
@@ -135,9 +143,22 @@ form.onsubmit = async e => {
   }
 };
 
+document.getElementById('update').onclick = async () => {
+  const upmsg = document.getElementById('upmsg');
+  if (!confirm('Restart the frame into update mode?')) return;
+  try {
+    const r = await fetch('/updater', { method: 'POST' });
+    if (!r.ok) throw 0;
+    upmsg.textContent = 'Restarting. In about half a minute, reload this page to choose the firmware file.';
+  } catch (err) {
+    upmsg.textContent = 'That did not work. Press the button on the frame and try again.';
+  }
+};
+
 fetch('/status').then(r => r.json()).then(s => {
   document.getElementById('info').textContent =
     `${s.photos} of ${s.max} photos stored` + (s.battery_pct >= 0 ? ` · Battery ${Math.min(100, s.battery_pct)}%` : '');
+  document.getElementById('ver').textContent = s.version;
   form.show.value = s.show; form.date.value = s.date; form.tz.value = s.tz; form.key.value = s.key;
 }).catch(() => {});
 </script>

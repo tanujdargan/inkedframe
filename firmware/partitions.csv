@@ -1,5 +1,8 @@
-# One app slot, no OTA: the rest of the 4 MB holds photos (192 KB each).
+# app0: the frame. app1: the small updater that writes a new frame app into app0 (see README).
+# photos: 10 photos of 125 KB, the artwork and an upload in progress.
 # Name,   Type, SubType, Offset,   Size
-nvs,      data, nvs,     0x9000,   0x6000
-factory,  app,  factory, 0x10000,  0x1C0000
-photos,   data, spiffs,  0x1D0000, 0x230000
+nvs,      data, nvs,     0x9000,   0x5000
+otadata,  data, ota,     0xe000,   0x2000
+app0,     app,  ota_0,   0x10000,  0x1B0000
+app1,     app,  ota_1,   0x1C0000, 0xC0000
+photos,   data, spiffs,  0x280000, 0x180000

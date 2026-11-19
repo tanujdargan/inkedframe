@@ -14,11 +14,12 @@ PALETTE.forEach((rgb, p) => {
   const hit = dither(rgba).filter(v => v === p).length / (W * H);
   assert(hit > 0.97, `solid palette colour ${p} came out only ${(hit * 100).toFixed(1)}% itself`);
 });
-// A gradient must give exactly 192000 bytes with every nibble a valid ink.
+// A gradient must give exactly 128000 bytes, each three valid inks (a*36 + b*6 + c, at most 215).
 const g = new Uint8ClampedArray(W * H * 4);
 for (let i = 0; i < W * H; i++) g.set([i % W / W * 255, (i / W | 0) / H * 255, 128, 255], i * 4);
 const packed = pack(dither(g));
-assert.strictEqual(packed.length, 192000);
-assert(packed.every(b => (b >> 4) < 6 && (b & 15) < 6));
+assert.strictEqual(packed.length, 128000);
+assert(packed.every(b => b < 216));
 assert(new Set(packed).size > 6, 'gradient should mix inks');
+assert.deepStrictEqual([...pack([5, 4, 3, 0, 1, 2])], [5*36 + 4*6 + 3, 0*36 + 1*6 + 2]);
 console.log('dither ok');

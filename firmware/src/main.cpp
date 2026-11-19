@@ -26,7 +26,9 @@
 #include <WiFiProv.h>
 #include <Wire.h>
 #include <driver/rtc_io.h>
+#include <esp_ota_ops.h>
 #include <esp_sntp.h>
+#include <esp_task_wdt.h>
 #include <esp_wifi.h>
 #include <qrcode.h>
 #include <rom/tjpgd.h>  // the JPEG decoder in the chip's ROM: costs no flash
@@ -36,8 +38,8 @@
 #endif
 
 const int W = 800, H = 480;
-const size_t PHOTO_BYTES = W * H / 2;  // 4 bits per pixel
-const int MAX_PHOTOS = 10;             // 10 x 192 KB fits the 2.2 MB photos partition
+const size_t PHOTO_BYTES = W * H / 3;  // three pixels per byte: a * 36 + b * 6 + c
+const int MAX_PHOTOS = 10;             // 10 x 125 KB, the artwork and an upload fit the 1.5 MB photos partition
 const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
 #ifndef SESSION_SECONDS
 #define SESSION_SECONDS 180
@@ -54,7 +56,7 @@ const char *FS_ROOT = "/littlefs";
 GxEPD2_7C<GxEPD2_730c_GDEP073E01, GxEPD2_730c_GDEP073E01::HEIGHT / 4>
   display(GxEPD2_730c_GDEP073E01(10, 9, 6, 5));
 
-// Photo files hold one of these indexes per nibble; same order as PALETTE in index.html.
+// Photo files hold these indexes, three per byte; same order as PALETTE in index.html.
 const uint16_t COLORS[] = {GxEPD_BLACK, GxEPD_WHITE, GxEPD_YELLOW, GxEPD_RED, GxEPD_BLUE, GxEPD_GREEN};
 // For dithering artwork on the frame; keep equal to PALETTE, SATURATION and CONTRAST in index.html.
 const uint8_t PALETTE[6][3] = {{25, 30, 33}, {232, 232, 232}, {239, 222, 68}, {178, 19, 24}, {33, 87, 186}, {53, 120, 70}};
@@ -66,7 +68,8 @@ Preferences prefs;
 WebServer server(80);
 volatile bool provStarted, gotIp, credFail;
 uint32_t lastActivity, lastUpload;
-bool uploaded, changed;
+bool uploaded, changed, toUpdater;
+bool pending;  // a new firmware from the updater that has not yet proved itself
 bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
 
 const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
@@ -219,15 +222,15 @@ bool showFile(const String &path) {
   if (!f || f.size() != PHOTO_BYTES) return false;
   Serial.printf("show %s\n", path.c_str());
   displayBegin();
-  static uint8_t row[W / 2];
+  static uint8_t rows[W];  // three rows: 800 is not a multiple of 3, but 3 x 800 is
   display.firstPage();
   do {
     f.seek(0);
-    for (int y = 0; y < H; y++) {
-      f.read(row, sizeof row);
-      for (int x = 0; x < W; x++) {
-        uint8_t c = (x & 1) ? (row[x / 2] & 0x0F) : (row[x / 2] >> 4);
-        display.drawPixel(x, y, c < 6 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
+    for (int y = 0; y < H; y += 3) {
+      f.read(rows, sizeof rows);
+      for (int i = 0; i < 3 * W; i++) {
+        uint8_t b = rows[i / 3], c = i % 3 == 0 ? b / 36 : i % 3 == 1 ? b / 6 % 6 : b % 6;
+        display.drawPixel(i % W, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
       }
     }
     drawDate();
@@ -289,6 +292,13 @@ uint16_t batteryMv() {  // 0 if absent
 }
 
 [[noreturn]] void sleepNow() {
+  // A deep-sleep wake skips the boot loader's check, so an unproven firmware would stay for good.
+  if (pending) {
+    Serial.println("new firmware not confirmed: rolling back");
+    Serial.flush();
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+    ESP.restart();  // the boot loader rolls back a pending image on any restart
+  }
   uint64_t secs = ROTATE_SECONDS;
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilHalfPastMidnight(localNow() % 86400);
@@ -368,7 +378,7 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
   LittleFS.remove(path);  // the partition has no room for a second copy when the photo store is full
   File f = LittleFS.open(path, "w");
   bool ok = err && f;
-  static uint8_t row[W / 2];
+  static uint8_t rows[W];  // three rows, three pixels per byte
   for (int y = 0; ok && y < H; y++) {
     float *cur = err + (y & 1) * (W + 2) * 3, *next = err + (~y & 1) * (W + 2) * 3;
     memset(next, 0, (W + 2) * 3 * sizeof(float));
@@ -382,7 +392,8 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
         for (int c = 0; c < 3; c++) d += (v[c] - PALETTE[i][c]) * (v[c] - PALETTE[i][c]);
         if (d < bestD) bestD = d, best = i;
       }
-      row[x / 2] = (x & 1) ? (row[x / 2] | best) : best << 4;
+      int i = y % 3 * W + x;
+      rows[i / 3] = (i % 3 ? rows[i / 3] * 6 : 0) + best;
       for (int c = 0; c < 3; c++) {
         float e = v[c] - PALETTE[best][c];
         cur[(x + 2) * 3 + c] += e * 7 / 16;
@@ -391,7 +402,7 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
         next[(x + 2) * 3 + c] += e / 16;
       }
     }
-    ok = f.write(row, sizeof row) == sizeof row;
+    if (y % 3 == 2) ok = f.write(rows, sizeof rows) == sizeof rows;
   }
   f.close();
   free(err);
@@ -519,7 +530,7 @@ void handleUpload() {
     got = 0;
   } else if (up.status == UPLOAD_FILE_WRITE) {
     got += up.currentSize;
-    if (f && got <= PHOTO_BYTES) f.write(up.buf, up.currentSize);
+    if (got <= PHOTO_BYTES && !(f && f.write(up.buf, up.currentSize) == up.currentSize)) got = SIZE_MAX / 2;  // file system full
   } else {  // END or ABORTED
     if (f) f.close();
     if (up.status == UPLOAD_FILE_END && got == PHOTO_BYTES) {
@@ -548,7 +559,9 @@ void session(bool resetWifi) {
   wifi_config_t stored = {};
   esp_wifi_get_config(WIFI_IF_STA, &stored);
   if (stored.sta.ssid[0] && !resetWifi) {
+#if TEST_BAD_FIRMWARE != 1  // bench only: 1 never joins Wi-Fi, 2 hangs, to test the rollback
     WiFi.begin();  // already paired: plain connect, Bluetooth never starts
+#endif
   } else {
     WiFiProv.beginProvision(WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_FREE_BTDM, WIFI_PROV_SECURITY_1, pop, name,
                             nullptr, nullptr, resetWifi);
@@ -558,6 +571,10 @@ void session(bool resetWifi) {
   uint32_t start = millis();
   while (!gotIp) {
     delay(50);
+    esp_task_wdt_reset();
+#if TEST_BAD_FIRMWARE == 2
+    while (true) {}
+#endif
     if (provStarted && !setupShown) {
       setupShown = true;
       Serial.printf("setup name=%s pop=%s\n", name, pop);
@@ -576,7 +593,7 @@ void session(bool resetWifi) {
       WiFi.disconnect(true, true);
       ESP.restart();
     }
-    if (millis() - start > (provStarted ? SETUP_MS : WIFI_TIMEOUT_MS)) return;  // give up, keep the current picture
+    if (millis() - start > (provStarted && !pending ? SETUP_MS : WIFI_TIMEOUT_MS)) return;  // give up, keep the current picture
   }
   Serial.printf("ip %s\n", WiFi.localIP().toString().c_str());
   WiFi.setSleep(true);  // modem sleep between beacons: about a third of the idle current
@@ -598,11 +615,11 @@ void session(bool resetWifi) {
   server.on("/status", HTTP_GET, [] {
     uint32_t seqs[MAX_PHOTOS + 1];
     int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ);  // SOC: the high byte is whole percent
-    char json[200];
+    char json[300];
     snprintf(json, sizeof json,
-             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\"}",
+             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\"}",
              listPhotos(seqs), MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
-             prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str());
+             prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
     server.send(200, "application/json", json);
   });
   server.on("/settings", HTTP_POST, [] {
@@ -624,12 +641,22 @@ void session(bool resetWifi) {
     else server.send(404);
   });
 #endif
+  server.on("/updater", HTTP_POST, [] {  // restart into the updater app in the other slot
+    toUpdater = !esp_ota_set_boot_partition(esp_ota_get_next_update_partition(nullptr));
+    server.send(toUpdater ? 200 : 500, "text/plain", toUpdater ? "restarting into the updater" : "no updater installed");
+  });
   server.on("/upload", HTTP_POST, [] {
     bool ok = uploaded && millis() - lastUpload < 1000;
     server.send(ok ? 200 : 400, "text/plain", ok ? "ok" : "not a frame photo");
   }, handleUpload);
   server.begin();
   Serial.println("serving");
+  if (pending) {  // joined Wi-Fi and serving: the new firmware is good
+    esp_ota_mark_app_valid_cancel_rollback();
+    esp_task_wdt_delete(nullptr);
+    pending = false;
+    Serial.println("new firmware confirmed");
+  }
 
   // Ends when idle, 4 s after the last upload (the batch is done) or 30 s after a settings change.
   lastActivity = millis();
@@ -637,6 +664,10 @@ void session(bool resetWifi) {
   while (millis() - lastActivity < (changed ? 30000 : SESSION_MS) && !(uploaded && millis() - lastUpload > 4000)) {
     server.handleClient();
     delay(2);
+    if (toUpdater) {
+      delay(500);  // let the reply go out
+      ESP.restart();
+    }
     if (digitalRead(BUTTON) == HIGH) up = millis();
     if (millis() - up > HOLD_RESET_MS) {  // held 5 s while the page is open: forget Wi-Fi, as at wake
       while (digitalRead(BUTTON) == LOW) delay(20);  // GPIO0 is a boot strapping pin: never restart while it is down
@@ -658,6 +689,9 @@ void session(bool resetWifi) {
   else if (changed) showPhoto(prefs.getUInt("cur", 0));  // redraw with the new date setting
 }
 
+// Keep a new firmware from the updater on probation; session() confirms it, sleepNow() rolls it back.
+extern "C" bool verifyRollbackLater() { return true; }
+
 void setup() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
@@ -667,7 +701,14 @@ void setup() {
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on logging when no computer is attached
-  Serial.printf("wake cause=%d button=%d\n", (int)cause, digitalRead(BUTTON));
+  esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+  esp_ota_get_state_partition(esp_ota_get_running_partition(), &state);
+  pending = state == ESP_OTA_IMG_PENDING_VERIFY;
+  if (pending) {  // a hang before it has proved itself also rolls back
+    esp_task_wdt_init(60, true);
+    esp_task_wdt_add(nullptr);
+  }
+  Serial.printf("wake cause=%d button=%d firmware %s ota state %d\n", (int)cause, digitalRead(BUTTON), FW_VERSION, (int)state);
   LittleFS.begin(true, FS_ROOT, 5, "photos");
   LittleFS.remove("/up.tmp");
   prefs.begin("frame");
