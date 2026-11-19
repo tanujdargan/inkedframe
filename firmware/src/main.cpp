@@ -525,7 +525,10 @@ void handleUpload() {
   if (up.status == UPLOAD_FILE_START) {
     uint32_t seqs[MAX_PHOTOS + 1];
     int n = listPhotos(seqs);
-    for (int i = 0; i <= n - MAX_PHOTOS; i++) LittleFS.remove(photoPath(seqs[i]));  // make room: drop the oldest
+    for (int i = 0; i <= n - MAX_PHOTOS; i++) {  // make room: drop the oldest
+      Serial.printf("drop %s\n", photoPath(seqs[i]).c_str());
+      LittleFS.remove(photoPath(seqs[i]));
+    }
     f = LittleFS.open("/up.tmp", "w");
     got = 0;
   } else if (up.status == UPLOAD_FILE_WRITE) {
@@ -538,7 +541,9 @@ void handleUpload() {
       prefs.putUInt("seq", seq);
       uploaded = LittleFS.rename("/up.tmp", photoPath(seq));
       lastUpload = millis();
+      Serial.printf("stored %s, file system %u of %u bytes used\n", photoPath(seq).c_str(), LittleFS.usedBytes(), LittleFS.totalBytes());
     } else {
+      Serial.printf("rejected upload of %u bytes\n", got);
       LittleFS.remove("/up.tmp");
     }
     got = SIZE_MAX;  // marks "this request is finished" for the reply below
