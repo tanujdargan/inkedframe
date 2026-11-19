@@ -23,7 +23,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <WiFiProv.h>
+#include <DNSServer.h>
 #include <Wire.h>
 #include <driver/rtc_io.h>
 #include <esp_ota_ops.h>
@@ -69,7 +69,7 @@ extern const char index_html[] asm("_binary_src_index_html_start");
 
 Preferences prefs;
 WebServer server(80);
-volatile bool provStarted, gotIp, credFail;
+volatile bool gotIp;
 uint32_t lastActivity, lastUpload, byeAt;  // byeAt: when the page was closed
 bool uploaded, changed, toUpdater, full;
 uint32_t showSeq;  // shown when the session ends: the newest upload or the one picked with "Show now"
@@ -80,8 +80,18 @@ bool lowBattery;  // draw a small battery sign on the picture
 const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
 
 // A colour refresh takes about 30 s. Doze instead of spinning the CPU while the panel is busy.
+DNSServer *setupDns;
+WebServer *setupWeb;
+
 void whilePanelBusy(const void *) {
-  if (!radioOff) { delay(10); return; }
+  if (!radioOff) {
+    if (setupWeb) {  // keep answering the phone while the setup screen is still drawing
+      setupDns->processNextRequest();
+      setupWeb->handleClient();
+    }
+    delay(10);
+    return;
+  }
   gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
   esp_sleep_enable_gpio_wakeup();
   esp_sleep_enable_timer_wakeup(1000000);
@@ -712,8 +722,6 @@ void daily() {
 // ---------- upload session ----------
 
 void onWifiEvent(arduino_event_t *e) {
-  if (e->event_id == ARDUINO_EVENT_PROV_START) provStarted = true;
-  if (e->event_id == ARDUINO_EVENT_PROV_CRED_FAIL) credFail = true;
   if (e->event_id == ARDUINO_EVENT_WIFI_STA_GOT_IP) gotIp = true;
 }
 
@@ -764,29 +772,122 @@ void confirmFirmware() {
   Serial.println("firmware confirmed");
 }
 
-void session(bool resetWifi) {
+// ---------- first-time Wi-Fi setup: the frame's own network and a small form ----------
+// No app needed: the phone's camera joins the network from the QR code, the phone then opens the
+// form by itself (every DNS name answers with the frame, which phones treat as a sign-in page).
+
+const char SETUP_SSID[] = "Photo Frame";
+const char SETUP_HTML[] PROGMEM = R"HTML(<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Photo frame setup</title>
+<style>body{font:18px system-ui,sans-serif;margin:0 auto;padding:24px 16px;max-width:420px;color:#222;background:#faf8f4}
+label{display:block;margin:16px 0 6px}select,input,button{font:inherit;width:100%;padding:14px;box-sizing:border-box;border-radius:10px;border:1px solid #999}
+button{margin-top:24px;background:#222;color:#fff;border:0}</style>
+<h1>Photo frame</h1><p>Choose your home Wi-Fi so the frame can receive photos.</p>
+<form id="f"><label for="s">Wi-Fi network</label><select id="s" name="ssid">%OPTIONS%</select>
+<label for="p">Wi-Fi password</label><input id="p" name="pass" type="text" autocapitalize="none" autocorrect="off" spellcheck="false">
+<button>Connect</button></form><p id="m" role="status" aria-live="polite"></p>
+<script>
+const f=document.getElementById('f'),m=document.getElementById('m');
+f.onsubmit=async e=>{e.preventDefault();m.textContent='Connecting. This takes up to 20 seconds.';
+try{await fetch('/join',{method:'POST',body:new URLSearchParams(new FormData(f))});
+for(;;){await new Promise(r=>setTimeout(r,2000));const t=await(await fetch('/state')).text();
+if(t=='ok'){m.textContent='Connected. The frame will show what to do next. You can close this page.';return}
+if(t=='failed'){m.textContent='That did not work. Check the password and try again.';return}}}
+catch(x){m.textContent='Look at the frame: in about a minute it shows Connected. If it still shows the setup screen, try again.'}};
+</script></html>)HTML";
+
+bool wifiSetup() {  // true once the frame has joined the home network
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  char name[20], pop[9];
-  snprintf(name, sizeof name, "PROV_frame_%02X%02X", mac[4], mac[5]);
-  snprintf(pop, sizeof pop, "%02x%02x%02x%02x", mac[2] ^ 0x5a, mac[3] ^ 0xa5, mac[4] ^ 0x3c, mac[5] ^ 0xc3);
+  static char pass[9], qrText[64], passLine[40];
+  snprintf(pass, sizeof pass, "%02x%02x%02x%02x", mac[2] ^ 0x5a, mac[3] ^ 0xa5, mac[4] ^ 0x3c, mac[5] ^ 0xc3);
+  WiFi.mode(WIFI_AP_STA);
+  String options;
+  for (int i = 0, n = WiFi.scanNetworks(); i < n; i++) {
+    String name = WiFi.SSID(i);
+    name.replace("&", "&amp;");
+    name.replace("<", "&lt;");
+    if (name.length() && options.indexOf(">" + name + "<") < 0) options += "<option>" + name + "</option>";
+  }
+  WiFi.softAP(SETUP_SSID, pass);
+  DNSServer dns;
+  WebServer portal(80);
+  int state = 0;  // 0 waiting for the form, 1 trying to join, 2 failed
+  uint32_t tryAt = 0;
+  dns.start(53, "*", WiFi.softAPIP());
+  portal.on("/state", [&] { portal.send(200, "text/plain", gotIp ? "ok" : state == 2 ? "failed" : "trying"); });
+  portal.on("/join", HTTP_POST, [&] {
+    portal.send(200, "text/plain", "trying");
+    WiFi.begin(portal.arg("ssid").c_str(), portal.arg("pass").c_str());
+    state = 1;
+    tryAt = millis();
+  });
+  portal.onNotFound([&] {
+    String page = FPSTR(SETUP_HTML);
+    page.replace("%OPTIONS%", options);
+    portal.send(200, "text/html", page);
+  });
+  portal.begin();
+  setupDns = &dns;
+  setupWeb = &portal;
+  Serial.printf("setup network \"%s\" password %s, %d networks seen\n", SETUP_SSID, pass, WiFi.scanComplete());
 
+  snprintf(qrText, sizeof qrText, "WIFI:T:WPA;S:%s;P:%s;;", SETUP_SSID, pass);
+  snprintf(passLine, sizeof passLine, "    password %s", pass);
+  esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+  cfg.display_func = [](esp_qrcode_handle_t qr) {
+    static const char *const lines[] = {"1. Point your phone's camera at", "    this code and tap Join",
+                                        "2. A page opens: choose your Wi-Fi", "    and type its password",
+                                        "No camera? Join Wi-Fi \"Photo Frame\",", passLine};
+    showText("Connect me to Wi-Fi", lines, 6, qr);
+  };
+  esp_qrcode_generate(&cfg, qrText);
+
+  uint32_t start = millis();
+  while (millis() - start < SETUP_MS && !(gotIp && state != 1)) {
+    dns.processNextRequest();
+    portal.handleClient();
+    esp_task_wdt_reset();
+    delay(2);
+    if (state == 1 && gotIp) {  // joined: give the page 6 s to hear "ok" before our network goes
+      uint32_t t = millis();
+      while (millis() - t < 6000) {
+        dns.processNextRequest();
+        portal.handleClient();
+        delay(2);
+      }
+      state = 0;
+    } else if (state == 1 && millis() - tryAt > 20000) {  // wrong password: forget it so the next wake offers setup again
+      state = 2;
+      WiFi.disconnect(false, true);
+    }
+  }
+  setupDns = nullptr;
+  setupWeb = nullptr;
+  portal.stop();
+  dns.stop();
+  WiFi.softAPdisconnect(true);
+  return gotIp;
+}
+
+void session(bool resetWifi) {
   radioOff = false;
   WiFi.onEvent(onWifiEvent);
   WiFi.setHostname("frame");
   WiFi.mode(WIFI_STA);
   wifi_config_t stored = {};
   esp_wifi_get_config(WIFI_IF_STA, &stored);
+  bool setupShown = false;
   if (stored.sta.ssid[0] && !resetWifi) {
 #if TEST_BAD_FIRMWARE != 1  // bench only: 1 never joins Wi-Fi, 2 hangs, to test the rollback
-    WiFi.begin();  // already paired: plain connect, Bluetooth never starts
+    WiFi.begin();
 #endif
-  } else {
-    WiFiProv.beginProvision(WIFI_PROV_SCHEME_BLE, WIFI_PROV_SCHEME_HANDLER_FREE_BTDM, WIFI_PROV_SECURITY_1, pop, name,
-                            nullptr, nullptr, resetWifi);
+  } else if (!pending) {  // a firmware still on trial must not sit in setup; it rolls back below
+    if (resetWifi) WiFi.disconnect(false, true);
+    if (!wifiSetup()) return;  // nobody set it up: keep the current picture and sleep
+    setupShown = true;
   }
 
-  bool setupShown = false;
   uint32_t start = millis();
   while (!gotIp) {
     delay(50);
@@ -794,25 +895,7 @@ void session(bool resetWifi) {
 #if TEST_BAD_FIRMWARE == 2
     while (true) {}
 #endif
-    if (provStarted && !setupShown) {
-      setupShown = true;
-      Serial.printf("setup name=%s pop=%s\n", name, pop);
-      static char payload[120];
-      snprintf(payload, sizeof payload, "{\"ver\":\"v1\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"ble\",\"security\":1}", name, pop);
-      esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-      cfg.display_func = [](esp_qrcode_handle_t qr) {
-        static const char *const lines[] = {"1. On your phone, install the app", "    \"ESP BLE Provisioning\"",
-                                            "2. In the app, scan this code", "3. Choose your Wi-Fi and",
-                                            "    enter its password"};
-        showText("Connect me to Wi-Fi", lines, 5, qr);
-      };
-      esp_qrcode_generate(&cfg, payload);
-    }
-    if (credFail) {  // wrong password: forget it and offer setup again
-      WiFi.disconnect(true, true);
-      ESP.restart();
-    }
-    if (millis() - start > (provStarted && !pending ? SETUP_MS : WIFI_TIMEOUT_MS)) return;  // give up, keep the current picture
+    if (millis() - start > WIFI_TIMEOUT_MS) return;  // give up, keep the current picture
   }
   Serial.printf("ip %s\n", WiFi.localIP().toString().c_str());
   WiFi.setSleep(true);  // modem sleep between beacons: about a third of the idle current
