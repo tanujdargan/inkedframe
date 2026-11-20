@@ -47,7 +47,7 @@ const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
 #endif
 const uint32_t SESSION_MS = SESSION_SECONDS * 1000UL;  // upload window after a button press
 const uint32_t SETUP_MS = 600000;      // how long Wi-Fi setup stays open
-const uint32_t HOLD_RESET_MS = 5000;
+const uint32_t HOLD_RESET_MS = 3000;  // people asked to hold "5 seconds" let go at about 4 (measured), so trigger at 3
 // Tune to the cell. Below LOW: one "please charge me" screen, then no refreshes until above CHARGED.
 const uint16_t WARN_BATTERY_MV = 3550, LOW_BATTERY_MV = 3400, CHARGED_MV = 3900;
 const uint32_t WIFI_TIMEOUT_MS = 20000;
@@ -99,7 +99,8 @@ void breathe(uint8_t r, uint8_t g, uint8_t b) {
   static uint32_t last;
   if (!watched || millis() - last < 20) return;
   last = millis();
-  float k = 0.1f + 0.9f * (1 - cosf(millis() % 4000 * (2 * PI / 4000))) / 2;
+  float k = (1 - cosf(millis() % 4000 * (2 * PI / 4000))) / 2;
+  k = 0.05f + 0.95f * k * k;  // squared: the eye is far more sensitive to steps at the dim end
   neopixelWrite(PIN_NEOPIXEL, r * k + 0.5f, g * k + 0.5f, b * k + 0.5f);
 }
 
@@ -109,7 +110,7 @@ void whilePanelBusy(const void *) {
       setupDns->processNextRequest();
       setupWeb->handleClient();
     }
-    breathe(14, 7, 0);
+    breathe(40, 20, 0);
     delay(10);
     return;
   }
@@ -117,9 +118,9 @@ void whilePanelBusy(const void *) {
   gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
   if (!pressed) gpio_wakeup_enable(BUTTON, GPIO_INTR_LOW_LEVEL);  // a press is remembered, see sleepNow()
   esp_sleep_enable_gpio_wakeup();
-  esp_sleep_enable_timer_wakeup(watched ? 250000 : 1000000);  // watched: wake often enough to breathe
+  esp_sleep_enable_timer_wakeup(watched ? 60000 : 1000000);  // watched: wake often enough to breathe smoothly
   esp_light_sleep_start();
-  breathe(14, 7, 0);
+  breathe(40, 20, 0);
   if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_disable(GPIO_NUM_5);
   gpio_wakeup_disable(BUTTON);
@@ -897,7 +898,7 @@ bool wifiSetup() {  // true once the frame has joined the home network
     dns.processNextRequest();
     portal.handleClient();
     esp_task_wdt_reset();
-    breathe(0, 0, 20);
+    breathe(0, 0, 40);
     delay(2);
     if (state == 1 && gotIp) {  // joined: give the page 6 s to hear "ok" before our network goes
       uint32_t t = millis();
@@ -1074,7 +1075,8 @@ void session(bool resetWifi) {
       ESP.restart();
     }
     if (digitalRead(BUTTON) == HIGH) up = millis();
-    if (millis() - up > HOLD_RESET_MS) {  // held 5 s while the page is open: forget Wi-Fi, as at wake
+    if (millis() - up > HOLD_RESET_MS) {  // held while the page is open: forget Wi-Fi, as at wake
+      led(0, 0, 40);
       while (digitalRead(BUTTON) == LOW) delay(20);  // GPIO0 is a boot strapping pin: never restart while it is down
       WiFi.disconnect(true, true);
       ESP.restart();
@@ -1130,7 +1132,8 @@ void setup() {
     // Button still down 5 s after it woke us means "forget Wi-Fi". Count from boot, not from here: the
     // chip and file system take a moment to start, and people release at about 5 s.
     while (cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW && millis() < HOLD_RESET_MS) delay(20);
-    bool held = cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW;  // still down at 5 s
+    bool held = cause == ESP_SLEEP_WAKEUP_EXT0 && digitalRead(BUTTON) == LOW;  // still down at 3 s
+    if (held) led(0, 0, 40);  // blue: seen, you can let go
     if (cause == ESP_SLEEP_WAKEUP_EXT0) Serial.printf("button %s at %lu ms\n", held ? "held" : "released", millis());
 #ifdef TEST_FORGET_WIFI  // bench only: behave as if the button had been held
     held = true;

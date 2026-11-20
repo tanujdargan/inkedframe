@@ -37,7 +37,7 @@ Closing the page (or leaving it) tells the frame to finish at once, unless photo
 The button does two things:
 
 - Press it: wake the frame and open the upload page for a few minutes.
-- Hold it for 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and start the Wi-Fi setup again, with the "Photo Frame" network and the QR code (for a new router or a new home). When held at wake, the 5 seconds count from the moment the frame wakes.
+- Hold it for about 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and start the Wi-Fi setup again, with the "Photo Frame" network and the QR code (for a new router or a new home). It triggers after 3 seconds, because people told to hold for 5 let go at about 4; the light turns blue the moment the hold has registered.
 
 The light on the board: green while the page can be opened, amber breathing slowly while the frame redraws, blue breathing slowly during Wi-Fi setup. It stays off for the nightly change, when nobody is watching.
 
@@ -96,7 +96,7 @@ Everything happens in `setup()`, then the chip goes back to deep sleep. What hap
 | Timer (00:30 local time), Date on, Artwork, Today or a pinned photo | Joins Wi-Fi, sets the clock by NTP (`pool.ntp.org`) and, for Automatic time zone, looks up the UTC offset at `http://ip-api.com`. Then shows the photo pinned to today if there is one, otherwise fetches the day's artwork, draws the Today page or steps to the next photo, with the date. |
 | Timer, battery low | See [Low battery](#low-battery). |
 | Button or power-on | Joins the stored Wi-Fi, serves `http://frame.local` until the session has been idle for 3 minutes (5 seconds after a settings change), stores uploads and settings, and shows the newest photo (or the one picked with "Show now") 4 seconds after the last upload or 2 seconds after the page was closed. |
-| Button held 5 seconds | Forgets the stored Wi-Fi and runs Wi-Fi setup again. |
+| Button held (3 seconds or more) | Forgets the stored Wi-Fi and runs Wi-Fi setup again. |
 | No Wi-Fi stored | Runs Wi-Fi setup: starts its own network "Photo Frame" (WPA2, with a password worked out from the chip's MAC address), answers every DNS name with its own address so the phone opens the setup form, and draws the QR code (network name and password) on the panel. Setup stays open for 10 minutes. |
 
 If Wi-Fi does not connect within 20 seconds the frame gives up and keeps the current picture. During setup, a network that cannot be joined within 20 seconds (a wrong password) is forgotten at once and the form says so, so it can be tried again while setup is open. Once the home network is joined, the form shows "Connected" for a few seconds before the frame's own network closes.
