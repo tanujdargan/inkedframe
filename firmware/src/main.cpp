@@ -416,7 +416,8 @@ bool showFile(const String &path, bool tall) {  // tall: the file was made for p
       }
     }
     int edge = H;
-    if (print) {
+    if (print) {  // the white under the work: dithering leaves stray ink there, as under the landscape label
+      g.fillRect(0, prefs.getUShort("arth", H), W, H, GxEPD_WHITE);
       int e = drawCaption(g, prefs.getUShort("arth", H));
       if (split) edge = e;
     } else if (label.length() && !dx) {
@@ -477,20 +478,17 @@ bool showPhoto(uint32_t seq) {
 bool showArt() { return showFile("/art.bin", prefs.getUShort("arth", 0)); }  // arth: 0 made for landscape
 
 // A plain text screen: a title, short lines (an empty one is a small gap) and optionally a figure 240 px
-// square, the setup QR code or a battery: beside the text in landscape, between title and text in portrait.
-void showText(const char *title, const char *const *lines, int n, std::function<void(Adafruit_GFX &, int, int)> figure = nullptr) {
+// wide and fh tall, the setup QR code or a battery: beside the text in landscape, above it in portrait.
+void showText(const char *title, const char *const *lines, int n, std::function<void(Adafruit_GFX &, int, int)> figure = nullptr,
+              int fh = 240) {
   paint([&](Adafruit_GFX &g) {
-    const int F = 240, x = 56, gap = 48;
-    const bool beside = W > H;
+    const int F = 240, x = 56, above = figure && W < H ? fh + 64 : 0;
     int end = 0;  // the last line's baseline, from the title's
     for (int i = 0; i < n; i++) end += !i ? 64 : *lines[i] ? 42 : 21;
-    int y = (H - LARGE_CAP - end - (figure && !beside ? F + 2 * gap : 0)) / 2 + LARGE_CAP;
+    int top = (H - above - LARGE_CAP - end) / 2, y = top + above + LARGE_CAP;
     g.fillScreen(GxEPD_WHITE);
+    if (figure) figure(g, above ? (W - F) / 2 : W - x - F, above ? top : (H - fh) / 2);
     text(g, Large, title, x, y);
-    if (figure) {
-      figure(g, beside ? W - x - F : (W - F) / 2, beside ? (H - F) / 2 : y + gap);
-      if (!beside) y += F + 2 * gap;
-    }
     for (int i = 0; i < n; i++) text(g, Text, lines[i], x, y += !i ? 64 : *lines[i] ? 42 : 21);
   });
 }
@@ -568,10 +566,10 @@ uint16_t batteryMv() {  // 0 if absent
 void showFlat() {  // a large, nearly empty battery beside the words
   static const char *const lines[] = {"with the USB-C cable.", "I'll be back once", "I'm charged."};
   showText("Please plug me in", lines, 3, [](Adafruit_GFX &g, int x, int y) {
-    for (int i = 0; i < 6; i++) g.drawRect(x + 8 + i, y + 70 + i, 200 - 2 * i, 100 - 2 * i, GxEPD_BLACK);
-    g.fillRect(x + 208, y + 100, 16, 40, GxEPD_BLACK);
-    g.fillRect(x + 24, y + 86, 30, 68, GxEPD_RED);
-  });
+    for (int i = 0; i < 6; i++) g.drawRect(x + 8 + i, y + i, 200 - 2 * i, 100 - 2 * i, GxEPD_BLACK);
+    g.fillRect(x + 208, y + 30, 16, 40, GxEPD_BLACK);
+    g.fillRect(x + 24, y + 16, 30, 68, GxEPD_RED);
+  }, 100);
 }
 
 // A refresh on a flat cell can brown out half-drawn. So at LOW the frame asks once to be charged, then
@@ -683,7 +681,8 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
         next[(x + 2) * 3 + c] += e / 16;
       }
     }
-    if (y % 3 == 2) ok = f.write(rows, W) == (size_t)W;
+    size_t n = (y % 3 + 1) * W / 3;  // portrait: 800 rows are not a multiple of 3, the last write has two
+    if (y % 3 == 2 || y == H - 1) ok = f.write(rows, n) == n;
   }
   f.close();
   free(err);
@@ -1074,19 +1073,19 @@ void session(bool resetWifi) {
 #endif
 #if ROTATE_SECONDS < 86400
   server.on("/render", HTTP_GET, [] {  // bench: what the panel would show, packed like a photo
-    canvas = new GFXcanvas16(800, 480);  // the panel as it is wired, whichever way the frame stands
-    uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     lowBattery = server.hasArg("low");
     benchDate = server.hasArg("date") ? server.arg("date").toInt() : -1;
     benchT = server.arg("t").toInt();
     if (server.hasArg("rot")) orient(server.arg("rot").toInt());
-    canvas->setRotation(rot);
-    if (server.hasArg("label")) prefs.putString("label", server.arg("label"));  // to try long titles
     if (server.hasArg("src")) prefs.putUChar("src", server.arg("src") == "1");
     benchPicsum = server.hasArg("picsum");
+    if (server.hasArg("fetch")) Serial.printf("bench fetch %d\n", fetchArt(millis() + 30000));  // for this way up and date style
+    if (server.hasArg("label")) prefs.putString("label", server.arg("label"));  // to try long titles
+    canvas = new GFXcanvas16(800, 480);  // the panel as it is wired, whichever way the frame stands
+    canvas->setRotation(rot);
+    uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     active();
     String w = server.arg("w");
-    if (server.hasArg("fetch")) Serial.printf("bench fetch %d\n", fetchArt(millis() + 30000));  // for this way up and date style
     if (w == "flat") showFlat();
     else if (w == "art") showArt();
     else if (w == "today") paint([](Adafruit_GFX &g) { drawToday(g, benchT); });
