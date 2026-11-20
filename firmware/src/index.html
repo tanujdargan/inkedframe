@@ -181,6 +181,10 @@ input::placeholder { color: var(--muted); opacity: 1; }
 #prep > .pad { padding-bottom: 28px !important; }
 .foot .note { margin: 0 0 12px; }
 .bar { height: 8px; border-radius: 0; background: var(--surface3); overflow: hidden; margin: 10px 0 0; }
+.batt { margin: 26px 0 6px; }
+.batt .bl { display: flex; justify-content: space-between; align-items: baseline; margin: 0; font: 600 13px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.batt .bl b { font: 800 30px/1 var(--sans); letter-spacing: -.02em; }
+.batt .stat { padding-top: 8px; }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 0; transition: width .4s; }
 :root[data-theme=dark] .bar i { background: var(--accent-text); }
 .prog p { margin: 0; }
@@ -242,6 +246,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
   <div class="live" id="live" data-s="look"><p class="lt"><span class="lamp"></span><span id="liveT" role="status">Looking for the frame…</span></p>
     <p class="stat" id="stat"></p><div class="bar" id="liveBar" hidden><i></i></div></div>
   <label class="hero" id="hero"><span data-i="photo" data-s="56"></span><b>Choose photos</b><small>Pick one or more from your phone</small><input id="pick" type="file" accept="image/*" multiple></label>
+  <div class="batt" id="batt" hidden><p class="bl"><span>Battery</span><b id="battP"></b></p><div class="bar" role="img" id="battBar"><i></i></div><p class="stat" id="battD"></p></div>
   <p id="homeMsg" role="status" class="hint"></p>
   <div id="napHome"></div>
   <div class="list">
@@ -556,8 +561,26 @@ async function wake(box = $('#napHome'), then) {  // after "Try again": is the f
   try { apply(await api('/status', {}, 8000, 'json')); finished = false; setAsleep(false); then && then(); }
   catch (e) { nap(box, ASLEEP, () => wake(box, then)); }
 }
+// How long a charge should last, from bench measurements of this firmware on a 2000 mAh cell (see the
+// README's power section): a day costs the sleep floor, one nightly redraw, a share of a weekly upload
+// and the cell's own self-discharge. An estimate for planning, not a gauge.
+const CELL_MAH = 2000, USABLE = 0.9, SLEEP_DAY = 0.55, UPLOADS_DAY = 0.37, SELF_DISCHARGE_DAY = 2.0;
+const NIGHTLY = [0.72, 1.12, 0.48];  // mAh per nightly redraw: my photos, artwork, today
+function daysLeft(pct, show) {
+  return CELL_MAH * USABLE * pct / 100 / (SLEEP_DAY + UPLOADS_DAY + SELF_DISCHARGE_DAY + (NIGHTLY[show] || NIGHTLY[0]));
+}
+function showBattery(s) {
+  if (!(s.battery_pct >= 0)) return;  // no fuel gauge fitted
+  const pct = Math.min(100, s.battery_pct), d = daysLeft(pct, s.show), n = d > 60 ? Math.round(d / 10) * 10 : Math.max(1, Math.round(d));
+  $('#batt').hidden = false;
+  $('#battP').textContent = pct + '%';
+  $('#battBar').firstChild.style.width = pct + '%';
+  $('#battBar').setAttribute('aria-label', `Battery ${pct} percent`);
+  $('#battD').textContent = pct < 8 ? 'Plug the frame in with its USB-C cable' : `About ${n} day${n == 1 ? '' : 's'} left`;
+}
 function apply(s) {
   stored = s.list; max = s.max; battery = s.battery_pct;
+  showBattery(s);
   if ((s.rot | 0) != rot) orient(s.rot | 0);
   $('#ver').textContent = s.version;
   if (!loaded) {  // fill the form once: a later check must not undo unsaved changes
