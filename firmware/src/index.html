@@ -618,7 +618,8 @@ function band(idx, W, H) {
   if (!lines.length) return;
   tctx.textAlign = 'center'; tctx.textBaseline = 'top';
   const font = (style, size) => tctx.font = `${style} ${size}px system-ui, -apple-system, sans-serif`;
-  for (const l of lines) while (font(l[1], l[2]), tctx.measureText(l[0]).width > W - 60 && l[2] > 12) l[2]--;
+  // clear of the top right corner, where the frame puts its low-battery sign
+  for (const l of lines) while (font(l[1], l[2]), tctx.measureText(l[0]).width > W - 180 && l[2] > 12) l[2]--;
   let y = 24;
   idx.fill(1, 0, (y + lines.reduce((h, l) => h + l[2] * 1.25, 0) + 12 | 0) * W);
   for (const [text, style, size, ink] of lines) {
