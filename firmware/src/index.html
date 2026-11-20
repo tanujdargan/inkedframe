@@ -678,15 +678,20 @@ pick.onchange = () => {
 };
 async function choose(files) {
   $('#homeMsg').textContent = files.length > 1 ? 'Getting your photos ready…' : 'Getting your photo ready…';
-  const got = [];
-  for (const f of files) try { got.push(await crop(f)); } catch (e) {}
-  const bad = files.length - got.length;
-  $('#homeMsg').textContent = got.length ? '' : 'That photo could not be opened. Try a different one.';
+  const got = [], bad = [];
+  for (const f of files) try { got.push(await crop(f)); } catch (e) { bad.push(f); }
+  // iPhone photos are HEIC: Safari opens them, Chrome, Brave, Edge and Firefox on a computer do not
+  const heic = bad.every(f => /\.hei[cf]$/i.test(f.name) || /^image\/hei[cf]$/i.test(f.type));
+  $('#homeMsg').textContent = got.length ? '' : heic ? "This browser can't open iPhone HEIC photos. Open this page in Safari, or send the photo from the phone it was taken on."
+    : "That file isn't a photo this page can open. Try a JPEG or PNG.";
   if (!got.length) return;
   picks = got; cur = 0; sendFrom = 0;
   strip();
   caption();
-  $('#sendMsg').innerHTML = bad ? `<p class="hint" style="margin:0 0 12px">${bad} of the photos could not be opened and ${bad > 1 ? 'were' : 'was'} left out.</p>` : '';
+  $('#sendMsg').innerHTML = bad.length ? '<p class="hint" style="margin:0 0 12px"></p>' : '';
+  const k = bad.length, them = k > 1 ? 'them' : 'it';
+  if (k) $('#sendMsg p').textContent = `${k == 1 ? '1 photo was' : `${k} photos were`} skipped (${bad.map(f => f.name).join(', ')}): ` +
+    (heic ? `this browser can't open HEIC photos. Open this page in Safari to send ${them}.` : `not ${k > 1 ? 'photos' : 'a photo'} this page can open. Try JPEG or PNG.`);
   labels();
   screen('prep');
   redraw(true);
