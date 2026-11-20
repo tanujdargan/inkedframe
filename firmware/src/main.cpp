@@ -831,6 +831,15 @@ void daily() {
   bool early = wokeEarly, fresh = artReady;  // the last wake came just before midnight, synced and fetched
   wokeEarly = artReady = false;
   Serial.printf("kept clock %ld%s\n", (long)time(nullptr), early ? ", synced on the wake before" : "");
+#if ROTATE_SECONDS == 86400
+  // The sleep after an early wake can itself end early (hours of drift if the first wake was far off):
+  // the clock was synced on that wake, so trust it and sleep the remainder again instead of drawing yesterday's date.
+  if (early && clockSet() && localNow() % DAY_SECONDS >= DAY_SECONDS / 2) {
+    wokeEarly = true;
+    artReady = fresh;
+    return;
+  }
+#endif
   if (!early) {
     radioOff = false;
     WiFi.mode(WIFI_STA);
