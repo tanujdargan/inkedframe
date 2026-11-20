@@ -39,6 +39,8 @@ The button does two things:
 - Press it: wake the frame and open the upload page for a few minutes.
 - Hold it for 5 seconds, either to wake the frame or while the upload page is open: forget the stored Wi-Fi and start the Wi-Fi setup again, with the "Photo Frame" network and the QR code (for a new router or a new home). When held at wake, the 5 seconds count from the moment the frame wakes.
 
+The light on the board: green while the page can be opened, amber breathing slowly while the frame redraws, blue breathing slowly during Wi-Fi setup. It stays off for the nightly change, when nobody is watching.
+
 ## Parts and wiring
 
 | Part | Notes |
@@ -180,6 +182,8 @@ These figures were measured on the bench with a Nordic PPK2 at 3.8 V on the batt
 | Daily wake, Random artwork (earlier firmware) | 1.26 mAh, 51 s awake |
 
 The daily-wake rows were measured with the bench build (the same `daily()` code, waking every minute); each range is three or more wakes. Most of the spread is the NTP request, which lwIP sends after a random 0 to 5 seconds, and for museum art the size of the image (50 to 450 KB). For comparison, a radio-off rotation measured 0.42 mAh. So the date costs about 0.3 mAh a day (about 120 mAh a year) and Museum art about 0.9 mAh a day (about 340 mAh a year) on top of the plain rotation. Both add one Wi-Fi connection a day, and the frame wakes at the same time each night instead of every 24 hours from the last wake.
+
+The light costs little either way. Measured on the radio-off rotation of two photos (the charge depends on the picture: 0.42 and 0.62 mAh with the old steady amber light, three wakes each), the breathing light, which wakes from light sleep every 250 ms instead of every second to step its brightness, measured 0.43 and 0.63 mAh (+1 to 2%), and with the light off, as on the nightly change, 0.41 and 0.61 mAh.
 
 At about 95 mA, the full 3-minute upload window costs about 5 mAh, and a typical quick upload about 2 mAh. Closing the page ends the session at once instead of after 3 idle minutes.
 

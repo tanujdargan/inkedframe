@@ -7,8 +7,8 @@
 //                            join Wi-Fi briefly, sync the clock, then draw (at 00:30 local time)
 //   button / power-on     -> join Wi-Fi, serve http://frame.local for a few minutes,
 //                            store uploads and settings, show the newest
-//   button held 5 s       -> forget Wi-Fi and run Bluetooth setup again
-//   no Wi-Fi stored       -> Bluetooth setup, QR code on the panel
+//   button held 5 s       -> forget Wi-Fi and run Wi-Fi setup again
+//   no Wi-Fi stored       -> Wi-Fi setup: the frame's own network, QR code on the panel
 #include <Arduino.h>
 #include <ESPmDNS.h>
 #include <Fonts/FreeSans12pt7b.h>
@@ -46,7 +46,7 @@ const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
 #define SESSION_SECONDS 180
 #endif
 const uint32_t SESSION_MS = SESSION_SECONDS * 1000UL;  // upload window after a button press
-const uint32_t SETUP_MS = 600000;      // how long Bluetooth setup stays open
+const uint32_t SETUP_MS = 600000;      // how long Wi-Fi setup stays open
 const uint32_t HOLD_RESET_MS = 5000;
 // Tune to the cell. Below LOW: one "please charge me" screen, then no refreshes until above CHARGED.
 const uint16_t WARN_BATTERY_MV = 3550, LOW_BATTERY_MV = 3400, CHARGED_MV = 3900;
@@ -74,7 +74,7 @@ uint32_t lastActivity, lastUpload, byeAt;  // byeAt: when the page was closed
 bool uploaded, changed, toUpdater, full;
 uint32_t showSeq;  // shown when the session ends: the newest upload or the one picked with "Show now"
 bool pending;  // a new firmware from the updater that has not yet proved itself
-bool radioOff = true;  // light sleep is only safe while Wi-Fi and Bluetooth are off
+bool radioOff = true;  // light sleep is only safe while Wi-Fi is off
 bool lowBattery;  // draw a small battery sign on the picture
 
 const uint8_t PANEL_PINS[] = {10, 9, 6, SCK, MOSI};  // CS, DC, RST, clock, data
@@ -84,12 +84,23 @@ DNSServer *setupDns;
 WebServer *setupWeb;
 volatile bool pressed;  // the button was pressed while the frame was busy drawing
 
-// The onboard light: green while the page can be opened, amber while drawing, blue in Wi-Fi setup,
-// off asleep. Dim on purpose: about 1 mA against the 90 mA the frame draws awake anyway.
+// The onboard light: green while the page can be opened, amber (breathing) while drawing, blue
+// (breathing) in Wi-Fi setup, off asleep. Dim on purpose: about 1 mA against the 90 mA the frame draws
+// awake anyway. Off for the nightly timer wake, when nobody is watching.
+bool watched;
 void led(uint8_t r, uint8_t g, uint8_t b) {
+  if (!watched) return;
   digitalWrite(NEOPIXEL_POWER, NEOPIXEL_POWER_ON);
   delay(2);
   neopixelWrite(PIN_NEOPIXEL, r, g, b);
+}
+// One step of a slow breath, 4 s in and out, from the clock: callers step it whenever they are awake.
+void breathe(uint8_t r, uint8_t g, uint8_t b) {
+  static uint32_t last;
+  if (!watched || millis() - last < 20) return;
+  last = millis();
+  float k = 0.1f + 0.9f * (1 - cosf(millis() % 4000 * (2 * PI / 4000))) / 2;
+  neopixelWrite(PIN_NEOPIXEL, r * k + 0.5f, g * k + 0.5f, b * k + 0.5f);
 }
 
 void whilePanelBusy(const void *) {
@@ -98,6 +109,7 @@ void whilePanelBusy(const void *) {
       setupDns->processNextRequest();
       setupWeb->handleClient();
     }
+    breathe(14, 7, 0);
     delay(10);
     return;
   }
@@ -105,8 +117,9 @@ void whilePanelBusy(const void *) {
   gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
   if (!pressed) gpio_wakeup_enable(BUTTON, GPIO_INTR_LOW_LEVEL);  // a press is remembered, see sleepNow()
   esp_sleep_enable_gpio_wakeup();
-  esp_sleep_enable_timer_wakeup(1000000);
+  esp_sleep_enable_timer_wakeup(watched ? 250000 : 1000000);  // watched: wake often enough to breathe
   esp_light_sleep_start();
+  breathe(14, 7, 0);
   if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_disable(GPIO_NUM_5);
   gpio_wakeup_disable(BUTTON);
@@ -877,13 +890,14 @@ bool wifiSetup() {  // true once the frame has joined the home network
     showText("Connect me to Wi-Fi", lines, 6, qr);
   };
   esp_qrcode_generate(&cfg, qrText);
-  led(0, 0, 14);
+  led(0, 0, 20);
 
   uint32_t start = millis();
   while (millis() - start < SETUP_MS && !(gotIp && state != 1)) {
     dns.processNextRequest();
     portal.handleClient();
     esp_task_wdt_reset();
+    breathe(0, 0, 20);
     delay(2);
     if (state == 1 && gotIp) {  // joined: give the page 6 s to hear "ok" before our network goes
       uint32_t t = millis();
@@ -1047,7 +1061,7 @@ void session(bool resetWifi) {
     esp_task_wdt_delete(nullptr);
   }
 
-  // Ends when idle, 4 s after the last upload (the batch is done), 30 s after a settings change or 2 s
+  // Ends when idle, 4 s after the last upload (the batch is done), 5 s after a settings change or 2 s
   // after the page was closed.
   lastActivity = millis();
   uint32_t up = millis();
@@ -1084,6 +1098,7 @@ extern "C" bool verifyRollbackLater() { return true; }
 
 void setup() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  watched = cause != ESP_SLEEP_WAKEUP_TIMER;
   setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
   panelOff();
   pinMode(BUTTON, INPUT_PULLUP);
