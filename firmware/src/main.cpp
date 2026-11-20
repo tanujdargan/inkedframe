@@ -4,7 +4,7 @@
 //
 // Life cycle (everything happens in setup(), then deep sleep):
 //   timer wake            -> show the next stored photo, radio off; with the date or artwork on,
-//                            join Wi-Fi briefly, sync the clock, then draw (at 00:30 local time)
+//                            join Wi-Fi briefly, sync the clock, then draw (at 00:01 local time)
 //   button / power-on     -> join Wi-Fi, serve http://frame.local for a few minutes,
 //                            store uploads and settings, show the newest
 //   button held 5 s       -> forget Wi-Fi and run Wi-Fi setup again
@@ -33,6 +33,13 @@
 
 #ifndef ROTATE_SECONDS
 #define ROTATE_SECONDS 86400  // how often the stored photos rotate
+#endif
+
+#ifndef DAY_SECONDS
+#define DAY_SECONDS 86400  // bench builds shorten the "day" to check the wake-time calibration
+#endif
+#ifndef WAKE_AT
+#define WAKE_AT 60  // the nightly change: seconds after local midnight
 #endif
 
 // The frame can stand four ways (setting "rot", the GxEPD2 rotation): 0 landscape, 1 turned a quarter
@@ -182,11 +189,24 @@ time_t localNow() {
   return time(nullptr) + (tz == AUTO_TZ ? prefs.getInt("tzc", 0) : tz * 60);
 }
 
-// The deep-sleep clock drifts by a percent or two, so each daily sleep aims at 00:30 local time from
-// a freshly synced clock. s is the local time of day: before noon today is done, so aim at tomorrow.
-constexpr uint32_t untilHalfPastMidnight(uint32_t s) { return 86400 + 1800 - s % 86400; }
-static_assert(untilHalfPastMidnight(1800) == 86400 && untilHalfPastMidnight(0) == 88200 &&
-              untilHalfPastMidnight(86400 - 600) == 2400 && untilHalfPastMidnight(86400 + 3600) == 84600, "");
+// Each daily sleep aims at WAKE_AT from a freshly synced clock. s is the local time of day: a wake
+// before noon has done today, so aim at tomorrow; one in the evening sleeps the few minutes left.
+constexpr uint32_t untilWake(uint32_t s) { return DAY_SECONDS + WAKE_AT - s % DAY_SECONDS; }
+static_assert(DAY_SECONDS != 86400 || (untilWake(60) == 86400 && untilWake(0) == 86460 && untilWake(86400 - 600) == 660 &&
+                                       untilWake(86400 + 3600) == 82860), "");
+
+// The deep-sleep timer and the clock kept through it both count an internal RC oscillator that is off
+// by a percent or two (tens of minutes a day), the same way. So each sync after a sleep compares how
+// long the kept clock says it slept with how long it really did, and sleepNow() scales the next sleep
+// by that factor ("drift"). Kept in RTC memory through deep sleep:
+RTC_DATA_ATTR double sleptAt, syncedAt;  // when it went to sleep and when it last synced; 0 if unknown
+RTC_DATA_ATTR bool wokeEarly, artReady;  // an evening wake synced (and fetched the art) for the next
+double bootClock;                        // the kept clock at boot
+double clockNow() {
+  timeval tv;
+  gettimeofday(&tv, nullptr);
+  return tv.tv_sec + tv.tv_usec / 1e6;
+}
 
 // NTP, then the UTC offset when the time zone is automatic. Wi-Fi must be up.
 void startNtp() {  // ask early (as soon as Wi-Fi is up) so the answer is usually in before anyone waits for it
@@ -206,6 +226,15 @@ bool syncClock() {
     if (!asked && millis() - start > 6000) { asked = true; sntp_restart(); }
     delay(50);
   }
+  double kept = bootClock + millis() / 1000.0, now = clockNow(), slept = kept - sleptAt;  // awake time is crystal-timed
+  if (sleptAt && slept > DAY_SECONDS / 24) {
+    float r = constrain((now - sleptAt) / slept, 0.95, 1.05), f = prefs.getFloat("drift", r);
+    prefs.putFloat("drift", f + (r - f) * 0.75f);  // a little smoothing: the oscillator follows the temperature
+    Serial.printf("drift: slept %.1f s by the kept clock, %.1f s really, factor %.5f, stored %.5f\n", slept, now - sleptAt, r,
+                  prefs.getFloat("drift", 1));
+  }
+  sleptAt = 0;
+  syncedAt = now;
   if (prefs.getInt("tz", AUTO_TZ) == AUTO_TZ) {
     WiFiClient tcp;
     HTTPClient http;
@@ -540,9 +569,11 @@ uint16_t batteryMv() {  // 0 if absent
   }
   uint64_t secs = ROTATE_SECONDS;
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
-  if (online() && clockSet()) secs = untilHalfPastMidnight(localNow() % 86400);
+  if (online() && clockSet()) secs = untilWake(localNow() % DAY_SECONDS) / prefs.getFloat("drift", 1) + 0.5f;
 #endif
-  Serial.printf("sleep %u s, awake %lu ms, screen %d\n", (unsigned)secs, millis(), prefs.getUChar("screen", 0));
+  sleptAt = syncedAt && clockNow() - syncedAt < DAY_SECONDS / 8 ? clockNow() : 0;  // a trusted start to measure this sleep
+  Serial.printf("sleep %u s, awake %lu ms, screen %d, drift %.5f\n", (unsigned)secs, millis(), prefs.getUChar("screen", 0),
+                prefs.getFloat("drift", 1));
   Serial.flush();
   server.stop();
   WiFi.disconnect(true);
@@ -794,24 +825,34 @@ bool fetchArt(uint32_t deadline) {
 
 void daily() {
   uint32_t deadline = millis() + 30000;  // a dead router or internet must not keep the frame awake
-  Serial.printf("kept clock %ld\n", (long)time(nullptr));
-  radioOff = false;
-  WiFi.mode(WIFI_STA);
-  WiFi.begin();
-  while (WiFi.status() != WL_CONNECTED && millis() < deadline - 20000) delay(50);  // up to 10 s
-  uint32_t joined = millis();
-  bool synced = WiFi.status() == WL_CONNECTED && syncClock();
-  Serial.printf("wifi %d at %lu ms, synced %d at %lu ms, clock %ld, local day second %ld, heap %u\n", WiFi.status() == WL_CONNECTED,
-                joined, synced, millis(), (long)time(nullptr), (long)(localNow() % 86400), ESP.getFreeHeap());
-#if ROTATE_SECONDS == 86400
-  if (clockSet() && localNow() % 86400 >= 43200) return;  // woke before midnight: sleepNow() sleeps the rest
-#endif
-  uint32_t pin = pinnedToday();
   int show = prefs.getUChar("show", 0);  // 0 my photos, 1 artwork, 2 today
-  bool art = show == 1 && !pin, fresh = art && synced && fetchArt(deadline);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  radioOff = true;
+  bool early = wokeEarly, fresh = artReady;  // the last wake came just before midnight, synced and fetched
+  wokeEarly = artReady = false;
+  Serial.printf("kept clock %ld%s\n", (long)time(nullptr), early ? ", synced on the wake before" : "");
+  if (!early) {
+    radioOff = false;
+    WiFi.mode(WIFI_STA);
+    WiFi.begin();
+    while (WiFi.status() != WL_CONNECTED && millis() < deadline - 20000) delay(50);  // up to 10 s
+    uint32_t joined = millis();
+    bool synced = WiFi.status() == WL_CONNECTED && syncClock();
+    long late = (localNow() - millis() / 1000 + DAY_SECONDS / 2 - WAKE_AT) % DAY_SECONDS - DAY_SECONDS / 2;  // the wake, from the target
+    Serial.printf("wifi %d at %lu ms, synced %d at %lu ms, clock %ld, local day second %ld (woke %ld s from the target), heap %u\n",
+                  WiFi.status() == WL_CONNECTED, joined, synced, millis(), (long)time(nullptr), (long)(localNow() % DAY_SECONDS), late,
+                  ESP.getFreeHeap());
+#if ROTATE_SECONDS == 86400
+    // Woke before midnight: fetch tonight's art now; sleepNow() sleeps the rest, and that wake needs no Wi-Fi.
+    wokeEarly = clockSet() && localNow() % DAY_SECONDS >= DAY_SECONDS / 2;
+#endif
+    fresh = show == 1 && (wokeEarly || !pinnedToday()) && synced && fetchArt(deadline);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    radioOff = true;
+    artReady = wokeEarly && fresh;
+    if (wokeEarly) return;
+  }
+  uint32_t pin = pinnedToday();
+  bool art = show == 1 && !pin;
   if (pin && showFile(photoPath(pin), meta(pin) & TALL)) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
   else if (show == 2) showToday();
   else if (!art) rotate();
@@ -1189,6 +1230,7 @@ void session(bool resetWifi) {
 extern "C" bool verifyRollbackLater() { return true; }
 
 void setup() {
+  bootClock = clockNow() - millis() / 1000.0;  // before any sync: the clock kept through the sleep
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   watched = cause != ESP_SLEEP_WAKEUP_TIMER;
   setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
