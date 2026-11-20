@@ -4,13 +4,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light">
 <script>
-// The panel takes about half a minute to redraw and the frame cannot answer meanwhile: count it down.
-function countdown(p, secs) {
-  const base = p.textContent, t = setInterval(() => {
-    p.textContent = --secs > 0 ? `${base} About ${secs} seconds to go.` : 'The frame should show it now. Press its button again to change more.';
-    if (secs <= 0) clearInterval(t);
-  }, 1000);
-}
 try { document.documentElement.dataset.theme = localStorage.getItem('theme') == 'dark' ? 'dark' : 'light'; } catch (e) { document.documentElement.dataset.theme = 'light'; }</script>
 <title>Photo frame</title>
 <style>
@@ -48,7 +41,18 @@ svg { flex: none; stroke-linecap: square; stroke-linejoin: miter; stroke-width: 
 #home > .top { border-bottom: 1.5px solid var(--edge); margin: 0 -20px; padding: 0 20px; }
 .tools { display: flex; gap: 8px; }
 .stat { color: var(--muted); font: 500 14px/1.5 var(--mono); letter-spacing: .06em; text-transform: uppercase; margin: 0; min-height: 21px; }
-#home > .stat { padding: 12px 0 0; }
+/* What the frame is doing: one strip that follows you to the screen or sheet in front */
+.live { margin: 14px 0 0; padding: 12px 14px 13px; background: var(--surface); border: 1.5px solid var(--edge); }
+.live p { margin: 0; }
+.live .lt { display: flex; align-items: center; gap: 10px; font: 700 15px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.lamp { flex: none; width: 10px; height: 10px; border: 1.5px solid currentColor; }
+.live[data-s=awake] .lamp, .live[data-s=draw] .lamp, .live[data-s=send] .lamp { background: currentColor; }
+.live[data-s=draw] .lamp, .live[data-s=send] .lamp { animation: blink 1.2s steps(2, jump-none) infinite; }
+@keyframes blink { 50% { background: transparent; } }
+.sheet .live { margin: 12px 0 18px; }
+.live .stat { padding: 3px 0 0 20px; }
+.live .bar { margin: 10px 0 0; }
+.live .bar i { transition: width 1s linear; }
 .hint { color: var(--muted); font-size: 15px; margin: 8px 0 0; }
 .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 56px; padding: 0 16px; border-radius: 0; border: 1.5px solid var(--edge);
   font: 700 15px/1.2 var(--mono); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; color: var(--ink); background: var(--surface); text-align: center; }
@@ -216,7 +220,8 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 
 <main id="home" class="screen pad">
   <header class="top"><h1>Photo frame</h1><div class="tools"><button class="icon" id="theme" type="button" aria-label="Dark mode" aria-pressed="false"><svg class="moon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="sun" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg></button><button class="icon" id="gear" type="button" aria-label="Frame settings" data-i="gear"></button></div></header>
-  <p class="stat" id="stat" role="status">Looking for the frame…</p>
+  <div class="live" id="live" data-s="look"><p class="lt"><span class="lamp"></span><span id="liveT" role="status">Looking for the frame…</span></p>
+    <p class="stat" id="stat"></p><div class="bar" id="liveBar" hidden><i></i></div></div>
   <label class="hero" id="hero"><span data-i="photo" data-s="56"></span><b>Choose photos</b><small>Pick one or more from your phone</small><input id="pick" type="file" accept="image/*" multiple></label>
   <p id="homeMsg" role="status" class="hint"></p>
   <div id="napHome"></div>
@@ -479,10 +484,40 @@ function setAsleep(on) {
   if (!on) $('#napHome').innerHTML = '';
   status();
 }
+// The strip: only its headline is a live region, so the countdown under it is not read out every second.
+// The countdown runs from an end time kept for this visit, so closing a confirmation or a sheet, a
+// reload or a phone that paused the page cannot lose or stretch it.
+const DRAW_SECS = { send: 45, save: 45, art: 60 };  // after a send, after Save, after Save with Artwork
+let drawEnd = 0, drawSecs = 0, liveTimer;
+function drawFor(secs) {
+  drawSecs = secs; drawEnd = Date.now() + secs * 1000;
+  try { sessionStorage.setItem('draw', drawEnd + ',' + secs); } catch (e) {}
+  tickLive();
+}
+function tickLive() {
+  clearTimeout(liveTimer);
+  const left = drawEnd - Date.now();
+  if (left > 0) liveTimer = setTimeout(tickLive, left % 1000 || 1000);
+  else if (drawEnd) {  // done: a press during the drawing has woken it again, or it sleeps
+    drawEnd = 0; finished = false;
+    try { sessionStorage.removeItem('draw'); } catch (e) {}
+    check();
+  }
+  status();
+}
 function status() {
-  const s = stored.length;
-  $('#stat').textContent = asleep ? 'The frame is asleep' : !loaded ? 'Looking for the frame…'
-    : `${s} of ${max} photos` + (battery >= 0 ? ` · Battery ${Math.min(100, battery)}%` : '');
+  const s = stored.length, left = Math.ceil((drawEnd - Date.now()) / 1000), draw = left > 0;
+  const [state, head, detail] = draw ? ['draw', 'Frame is drawing', `About ${left} second${left > 1 ? 's' : ''} to go`]
+    : busy ? ['send', 'Frame is receiving', 'Keep this page open']
+    : asleep ? ['sleep', 'Frame is asleep', 'Press its button to change more']
+    : !loaded ? ['look', 'Looking for the frame…', '']
+    : ['awake', 'Frame is awake', `${s} of ${max} photos` + (battery >= 0 ? ` · Battery ${Math.min(100, battery)}%` : '')];
+  $('#live').dataset.s = state;
+  if ($('#liveT').textContent != head) $('#liveT').textContent = head;
+  $('#stat').textContent = detail;
+  $('#liveBar').hidden = !draw;
+  $('#liveBar i').style.width = draw ? `${100 - left / drawSecs * 100}%` : 0;
+  $('#napHome').hidden = draw;  // pressing the button now opens the page only after the drawing
   $('#countRow').textContent = !loaded ? '' : s ? `${s} of ${max}` : 'None yet';
   $('#phCount').textContent = loaded ? `${s} of ${max} photos` : '';
 }
@@ -521,6 +556,12 @@ async function crop(file) {
   const px = wctx.getImageData(0, 0, W, H);
   return { px, auto: dominantInk(px.data), memo: {} };
 }
+// The strip follows you: the top of the screen or the sheet in front.
+function dock() {
+  const d = $$('.sheet[open]').pop(), on = ['home', 'prep', 'sent'].find(s => !$('#' + s).hidden);
+  (d ? d.querySelector('header') : on == 'sent' ? $('#sentP') : $(`#${on} .top`)).after($('#live'));
+}
+for (const d of $$('.sheet')) new MutationObserver(dock).observe(d, { attributeFilter: ['open'] });
 const look = () => $('#look :checked').value, inkSel = () => $('#inks :checked').value;
 function base(p, t = look()) {  // the dithered photo without text, kept so typing never dithers again
   const ink = t == 'duotone' ? +inkSel() || p.auto : 0, key = t + ink;
@@ -624,6 +665,7 @@ function caption() {
 }
 function screen(id) {
   for (const s of ['home', 'prep', 'sent']) $('#' + s).hidden = s != id;
+  dock();
   scrollTo(0, 0);
 }
 const keepLook = () => { try { localStorage.setItem('look', look() + ',' + inkSel()); } catch (e) {} };
@@ -646,6 +688,7 @@ async function send() {
   const n = picks.length, msg = $('#sendMsg'), pin = pinned() ? `?pin=${$('#month').value * 100 + +$('#day').value}` : '';
   stopThumbs();
   busy = true;
+  status();
   msg.innerHTML = '';
   $('#opts').disabled = $('#back').hidden = $('#send').hidden = true;
   $('#prog').hidden = false;
@@ -668,7 +711,9 @@ async function send() {
     $('#sentT').textContent = pin ? `Saved for ${pinLabel()}` : n > 1 ? `Sent ${n} photos` : 'Sent';
     $('#sentP').textContent = pin ? `On ${pinLabel()} every year the frame shows ${n > 1 ? 'the last of these photos' : 'this photo'}. Until then it keeps its current picture.`
       : 'The frame is changing, about half a minute.';
-    if (!pin) countdown($('#sentP'), 45);
+    busy = false;
+    setAsleep(true);  // it draws (unless the photo waits for its date) and sleeps
+    if (!pin) drawFor(DRAW_SECS.send);
     $('#sentMat').classList.toggle('flash', !pin);
     screen('sent');
     $('#sentT').focus();
@@ -679,6 +724,7 @@ async function send() {
     } else nap(msg, SEND_ASLEEP, send);
   }
   busy = false;
+  status();
   $('#opts').disabled = $('#back').hidden = $('#send').hidden = false;
   $('#prog').hidden = true;
 }
@@ -687,16 +733,16 @@ $('#doneBtn').onclick = () => {
   picks = [];
   for (const id of ['month', 'day', 'greet', 'note', 'from']) $('#' + id).value = '';
   $('#pinbox').open = $('#capbox').open = false;
-  setAsleep(true);  // the frame changes its picture and goes to sleep
   screen('home');
 };
 
 // Closing the page lets the frame finish at once. Not while uploading or in the photo picker: iPhone
-// Safari can hide the page for the picker.
-addEventListener('pagehide', () => busy || picking || navigator.sendBeacon('/bye'));
+// Safari can hide the page for the picker. Not while counting down either: the frame is finishing
+// already, and a reload then does not ask the frame anything that would undo the goodbye.
+addEventListener('pagehide', () => busy || picking || drawEnd || navigator.sendBeacon('/bye'));
 const check = () => busy || picking || finished || api('/status', {}, 8000, 'json').then(s => { apply(s); setAsleep(false); }, () => setAsleep(true));
 addEventListener('pageshow', e => e.persisted && check());
-document.addEventListener('visibilitychange', () => document.visibilityState == 'visible' && check());
+document.addEventListener('visibilitychange', () => document.visibilityState == 'visible' && (drawEnd ? tickLive() : check()));
 
 // ---------- sheets ----------
 for (const b of $$('.x')) b.onclick = () => b.closest('dialog').close();
@@ -739,9 +785,9 @@ async function save() {
   try {
     await api('/settings', { method: 'POST', body: new URLSearchParams(new FormData(form)) }, 10000);
     out.innerHTML = `<div class="note ok">${ic('check')}<div><strong>Saved</strong><p>The frame is updating now, about half a minute. Press its button again to change more.</p></div></div>`;
-    countdown(out.querySelector('p'), form.show && form.show.value == 1 ? 60 : 45);
     finished = true;
     setAsleep(true);
+    drawFor(form.show.value == 1 ? DRAW_SECS.art : DRAW_SECS.save);
   } catch (e) {
     nap(out, 'The frame has gone to sleep, so this was not saved. Press the button on the frame, then tap Try again.', save);
   }
@@ -865,8 +911,11 @@ $('#delOne').onclick = async () => {
   grid();
 };
 
-status();
-api('/status', {}, 8000, 'json').then(apply, () => setAsleep(true));
+// Reloaded while the frame draws: keep counting and leave it alone. A request now would keep a frame
+// that is about to draw awake for longer.
+try { [drawEnd, drawSecs] = sessionStorage.getItem('draw').split(',').map(Number); } catch (e) {}
+if (drawEnd > Date.now()) { finished = true; setAsleep(true); tickLive(); }
+else { tickLive(); api('/status', {}, 8000, 'json').then(apply, () => setAsleep(true)); }
 </script>
 <script>
 // Light or dark page, chosen with the button at the top and remembered on this phone.
