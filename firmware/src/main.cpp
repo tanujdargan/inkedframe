@@ -11,9 +11,6 @@
 //   no Wi-Fi stored       -> Wi-Fi setup: the frame's own network, QR code on the panel
 #include <Arduino.h>
 #include <ESPmDNS.h>
-#include <Fonts/FreeSans12pt7b.h>
-#include <Fonts/FreeSansBold18pt7b.h>
-#include <Fonts/FreeSansBold24pt7b.h>
 #include <GxEPD2_7C.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
@@ -38,8 +35,18 @@
 #define ROTATE_SECONDS 86400  // how often the stored photos rotate
 #endif
 
-const int W = 800, H = 480;
-const size_t PHOTO_BYTES = W * H / 3;  // three pixels per byte: a * 36 + b * 6 + c
+// The frame can stand four ways (setting "rot", the GxEPD2 rotation): 0 landscape, 1 turned a quarter
+// turn left, 2 upside down, 3 turned right. Photos and artwork are stored upright as the person sees
+// them (480x800 in portrait, the same 128,000 bytes) and the panel driver rotates, so every overlay
+// is laid out in the picture's own coordinates. W and H are the picture's width and height.
+int W = 800, H = 480;
+uint8_t rot;
+void orient(int r) {
+  rot = r & 3;
+  W = rot & 1 ? 480 : 800;
+  H = 1280 - W;
+}
+const size_t PHOTO_BYTES = 800 * 480 / 3;  // three pixels per byte: a * 36 + b * 6 + c
 const int MAX_PHOTOS = 10;             // 10 x 125 KB, the artwork and an upload fit the 1.5 MB photos partition
 const gpio_num_t BUTTON = GPIO_NUM_0;  // onboard BOOT button
 #ifndef SESSION_SECONDS
@@ -146,10 +153,12 @@ String photoPath(uint32_t seq) {
   return p;
 }
 
-// Per photo, in the settings: KEEP (never dropped for a new upload) and a pinned date, month * 100 + day.
-const uint16_t KEEP = 0x8000;
+// Per photo, in the settings: KEEP (never dropped for a new upload), TALL (made for portrait) and a
+// pinned date, month * 100 + day (PIN).
+const uint16_t KEEP = 0x8000, TALL = 0x4000, PIN = 0x3fff;
 String metaKey(uint32_t seq) { return "m" + String(seq); }
 uint16_t meta(uint32_t seq) { return prefs.getUShort(metaKey(seq).c_str(), 0); }
+bool fits(uint32_t seq) { return !(meta(seq) & TALL) == (W > H); }  // made for the way the frame stands now
 
 void removePhoto(uint32_t seq) {
   Serial.printf("remove %s\n", photoPath(seq).c_str());
@@ -163,7 +172,7 @@ bool online() {  // needs Wi-Fi once a day
   if (prefs.getUChar("date", 0) || prefs.getUChar("show", 0)) return true;
   uint32_t seqs[MAX_PHOTOS + 1];
   for (int i = listPhotos(seqs); i--;)
-    if (meta(seqs[i]) & ~KEEP) return true;  // a pinned photo needs the right date
+    if (meta(seqs[i]) & PIN) return true;  // a pinned photo needs the right date
   return false;
 }
 bool clockSet() { return time(nullptr) > 1700000000; }  // false after a power loss until NTP has run
@@ -231,14 +240,15 @@ void displayBegin() {
   for (uint8_t pin : PANEL_PINS) gpio_hold_dis((gpio_num_t)pin);
   display.init(0, true, 2, false);
   display.epd2.setBusyCallback(whilePanelBusy);
-  display.setRotation(0);
+  display.setRotation(rot);
   display.setFullWindow();
 }
 
 #if ROTATE_SECONDS < 86400  // bench builds: GET /render draws into memory instead, to look at it on a computer,
-GFXcanvas16 *canvas;         // and with ?date= and ?t= in another date style and on another day, without saving them
-int benchDate = -1;
+GFXcanvas16 *canvas;         // and with ?date=, ?t= and ?rot= in another date style, on another day and another way up,
+int benchDate = -1;          // without saving them
 time_t benchT;
+bool benchPicsum;
 #endif
 
 int dateMode() {  // 0 off, 1 corner, 2 banner, 3 big, 4 split
@@ -297,21 +307,24 @@ String fit(Adafruit_GFX &g, const GFXfont &f, String s, int w) {  // shortened w
   return s;
 }
 const int SMALL_CAP = 16, TEXT_CAP = 22, LARGE_CAP = 29, NUM100 = 100, NUM150 = 150;  // cap heights of fonts.h
+const int SPLIT_H = 400;  // Split in portrait: the top 480x400 of the picture (where a greeting is), the date below
 
-// Up to two lines of s, wrapped at spaces to fit w, ending at baseline y. Returns the first baseline.
-int wrap2(Adafruit_GFX &g, const GFXfont &f, String s, int x, int y, int w, int lead) {
+// Up to two lines of s, wrapped at spaces to fit w, ending at baseline y (down: starting there).
+// Returns the baseline at the other end.
+int wrap2(Adafruit_GFX &g, const GFXfont &f, String s, int x, int y, int w, int lead, bool down = false) {
   int cut = s.length();
   while (ink(g, f, s.substring(0, cut).c_str()) > w && s.lastIndexOf(' ', cut - 1) > 0) cut = s.lastIndexOf(' ', cut - 1);
   String rest = s.substring(cut);
   rest.trim();
-  if (rest.length()) y -= lead;
+  if (rest.length() && !down) y -= lead;
   text(g, f, fit(g, f, s.substring(0, cut), w).c_str(), x, y);
   if (rest.length()) text(g, f, fit(g, f, rest, w).c_str(), x, y + lead);
-  return y;
+  return rest.length() && down ? y + lead : y;
 }
 
-// Today's date in black on white, so it reads over any picture. Split: the right part of the frame.
-void drawDate(Adafruit_GFX &g, int H, bool label) {  // H: the bottom of the picture
+// Today's date in black on white, so it reads over any picture. edge: the bottom of the picture, or with
+// Split in portrait where its panel starts. label: museum art's title and artist go in Split's column.
+void drawDate(Adafruit_GFX &g, int edge, bool label) {
   int mode = dateMode();
   time_t t = localNow();
 #if ROTATE_SECONDS < 86400
@@ -327,22 +340,26 @@ void drawDate(Adafruit_GFX &g, int H, bool label) {  // H: the bottom of the pic
   if (mode == 1) {  // corner: "Thu 19 Nov", bottom right
     snprintf(s, sizeof s, "%.3s %d %.3s", day, d.tm_mday, mon);
     int w = ink(g, Text, s);
-    g.fillRect(W - 24 - 18 - w - 18, H - 24 - 16 - TEXT_CAP - 16, w + 36, TEXT_CAP + 32, GxEPD_WHITE);
-    text(g, Text, s, W - 24 - 18, H - 24 - 16, 1);
-  } else if (mode == 2) {  // banner: weekday on the left, the date on the right
+    g.fillRect(W - 24 - 18 - w - 18, edge - 24 - 16 - TEXT_CAP - 16, w + 36, TEXT_CAP + 32, GxEPD_WHITE);
+    text(g, Text, s, W - 24 - 18, edge - 24 - 16, 1);
+  } else if (mode == 2) {  // banner: weekday on the left, the date on the right; two lines where too narrow
     snprintf(s, sizeof s, "%d %s %d", d.tm_mday, mon, d.tm_year + 1900);
-    g.fillRect(0, H - 64, W, 64, GxEPD_WHITE);
-    text(g, Text, day, 32, H - 32 + TEXT_CAP / 2);
-    text(g, Text, s, W - 32, H - 32 + TEXT_CAP / 2, 1);
+    bool two = ink(g, Text, day) + 48 + ink(g, Text, s) > W - 64;
+    int h = two ? 112 : 64;
+    g.fillRect(0, edge - h, W, h, GxEPD_WHITE);
+    text(g, Text, day, 32, edge - h + 32 + TEXT_CAP / 2);
+    text(g, Text, s, two ? 32 : W - 32, edge - 32 + TEXT_CAP / 2, two ? -1 : 1);
   } else if (mode == 3) {  // big: the day number, month and weekday beside it, bottom left
-    int top = H - 24 - 26 - NUM100, x = 24 + 26 + ink(g, Num100, num) + 22, mw = std::max(ink(g, Large, mon), ink(g, Text, day));
+    int top = edge - 24 - 26 - NUM100, x = 24 + 26 + ink(g, Num100, num) + 22, mw = std::max(ink(g, Large, mon), ink(g, Text, day));
     g.fillRect(24, top - 26, x + mw + 26 - 24, NUM100 + 52, GxEPD_WHITE);
     text(g, Num100, num, 24 + 26, top);
     text(g, Large, mon, x, top + LARGE_CAP);
     text(g, Text, day, x, top + NUM100);
-  } else {  // split: the picture's middle on the left, the date in a white column on the right
-    const int x = 480 + 40, gap = label ? 22 : 40, top = label ? 28 : (::H - 3 * gap - 2 * LARGE_CAP - NUM150 - TEXT_CAP) / 2;
-    g.fillRect(480, 0, W - 480, ::H, GxEPD_WHITE);
+  } else {  // split: a white panel beside the picture (landscape) or under it (portrait), the date stacked
+    const bool tall = W < H;
+    const int x = tall ? 48 : 480 + 40, y0 = tall ? edge : 0, room = H - y0, block = 2 * LARGE_CAP + NUM150 + TEXT_CAP,
+              gap = label ? 22 : std::min(40, (room - block) / 5), top = label ? 28 : y0 + (room - 3 * gap - block) / 2;
+    g.fillRect(tall ? 0 : 480, y0, W, room, GxEPD_WHITE);
     text(g, Large, day, x, top + LARGE_CAP);
     text(g, Num150, num, x, top + LARGE_CAP + gap);
     text(g, Large, mon, x, top + LARGE_CAP + 2 * gap + NUM150 + LARGE_CAP);
@@ -350,8 +367,8 @@ void drawDate(Adafruit_GFX &g, int H, bool label) {  // H: the bottom of the pic
     text(g, Text, s, x, top + 3 * gap + 2 * LARGE_CAP + NUM150 + TEXT_CAP);
     if (label) {  // museum art: title and artist at the bottom of the column, under a short rule
       String l = prefs.getString("label");
-      int y = wrap2(g, Small, l.substring(0, l.indexOf('|')), x, ::H - 36 - 28, W - 40 - x, 26);
-      text(g, Small, fit(g, Small, l.substring(l.indexOf('|') + 1), W - 40 - x).c_str(), x, ::H - 36);
+      int y = wrap2(g, Small, l.substring(0, l.indexOf('|')), x, H - 36 - 28, W - 40 - x, 26);
+      text(g, Small, fit(g, Small, l.substring(l.indexOf('|') + 1), W - 40 - x).c_str(), x, H - 36);
       g.fillRect(x, y - SMALL_CAP - 16, 40, 2, GxEPD_BLACK);
     }
   }
@@ -372,46 +389,65 @@ void drawLabel(Adafruit_GFX &g) {
   g.print(a);  // straight after the title
 }
 
-bool showFile(const String &path) {
+// Museum art in portrait is shown like a print: the whole work across the top (h rows), and under it
+// the title and the artist. Returns where the white below begins.
+int drawCaption(Adafruit_GFX &g, int h) {
+  String l = prefs.getString("label");
+  int y = wrap2(g, SmallBold, l.substring(0, l.indexOf('|')), 32, h + 28 + SMALL_CAP, W - 64, 26, true);
+  text(g, Small, fit(g, Small, l.substring(l.indexOf('|') + 1), W - 64).c_str(), 32, y + 28);
+  return y + 28 + 24;
+}
+
+bool showFile(const String &path, bool tall) {  // tall: the file was made for portrait
   File f = LittleFS.open(path);
-  if (!f || f.size() != PHOTO_BYTES) return false;
+  if (!f || f.size() != PHOTO_BYTES || tall != (W < H)) return false;  // never sideways or squashed
   Serial.printf("show %s\n", path.c_str());
   paint([&](Adafruit_GFX &g) {
-    static uint8_t rows[W];  // three rows: 800 is not a multiple of 3, but 3 x 800 is
-    int dx = dateMode() == 4 && clockSet() ? 160 : 0;  // split: the middle 480 columns, on the left
+    static uint8_t rows[800];  // three rows of the picture: 800 is not a multiple of 3, but 3 x 800 is
+    String label = path == "/art.bin" ? prefs.getString("label") : "";
+    bool split = dateMode() == 4 && clockSet(), print = label.length() && tall;
+    int dx = split && !tall ? 160 : 0;  // split in landscape: the middle 480 columns, on the left
     f.seek(0);
     for (int y = 0; y < H; y += 3) {
-      f.read(rows, sizeof rows);
+      f.read(rows, W);
       for (int i = 0; i < 3 * W; i++) {
         uint8_t b = rows[i / 3], c = i % 3 == 0 ? b / 36 : i % 3 == 1 ? b / 6 % 6 : b % 6;
         g.drawPixel(i % W - dx, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
       }
     }
-    bool label = path == "/art.bin" && prefs.getString("label").length(), strip = label && !dx;
-    if (strip) drawLabel(g);
-    drawDate(g, strip ? H - LABEL_H : H, label);
+    int edge = H;
+    if (print) {
+      int e = drawCaption(g, prefs.getUShort("arth", H));
+      if (split) edge = e;
+    } else if (label.length() && !dx) {
+      drawLabel(g);
+      edge = H - LABEL_H;
+    } else if (split && tall) edge = SPLIT_H;
+    drawDate(g, edge, label.length() && dx);
     drawBattery(g);
   });
   return true;
 }
 
-// The "Today" page: day number, weekday, month and year, and the moon's phase.
+// The "Today" page: day number, weekday, month and year, and the moon's phase (beside them in
+// landscape, under them in portrait).
 void drawToday(Adafruit_GFX &g, time_t t) {
   tm d;
   gmtime_r(&t, &d);
   char s[24];
-  const int top = 76, x = 64;
+  const bool tall = W < H;
+  const int top = tall ? 72 : 76, x = tall ? 48 : 64, base = top + 211 + 44 + LARGE_CAP + 20 + TEXT_CAP;
   g.fillScreen(GxEPD_WHITE);
   snprintf(s, sizeof s, "%d", d.tm_mday);
   text(g, Num210, s, x, top);
   strftime(s, sizeof s, "%A", &d);
   text(g, Large, s, x, top + 211 + 44 + LARGE_CAP);
   strftime(s, sizeof s, "%B %Y", &d);
-  text(g, Text, s, x, top + 211 + 44 + LARGE_CAP + 20 + TEXT_CAP);
+  text(g, Text, s, x, base);
   // Moon: days since the new moon of 6 Jan 2000 18:14 UTC, in mean synodic months. The real moon runs
   // up to about 14 hours ahead of or behind this mean, so the phase is right to within about a day.
   float p = fmodf((t / 86400.0 - 10962.76) / 29.530589, 1);
-  const int cx = 600, cy = top + 120, r = 120;
+  const int r = 120, cx = tall ? W / 2 : 600, cy = tall ? (base + H - 56) / 2 : top + 120;
   g.fillCircle(cx, cy, r, GxEPD_BLACK);
   for (int y = -r; y <= r; y++) {  // the lit part, as seen from the northern hemisphere
     float hw = sqrtf(r * r - y * y), edge = hw * cosf(2 * PI * p);
@@ -422,7 +458,7 @@ void drawToday(Adafruit_GFX &g, time_t t) {
   g.drawCircle(cx, cy, r + 1, GxEPD_BLACK);
   static const char *const names[] = {"New moon", "Waxing crescent", "First quarter", "Waxing gibbous",
                                       "Full moon", "Waning gibbous", "Last quarter", "Waning crescent"};
-  text(g, Text, names[int(p * 8 + 0.5f) % 8], cx, top + 211 + 44 + LARGE_CAP + 20 + TEXT_CAP, 0);
+  text(g, Text, names[int(p * 8 + 0.5f) % 8], cx, tall ? cy + r + 56 : base, 0);
   drawBattery(g);
 }
 
@@ -434,31 +470,41 @@ bool showToday() {
 }
 
 bool showPhoto(uint32_t seq) {
-  if (!showFile(photoPath(seq))) return false;
+  if (!showFile(photoPath(seq), meta(seq) & TALL)) return false;
   prefs.putUInt("cur", seq);
   return true;
 }
+bool showArt() { return showFile("/art.bin", prefs.getUShort("arth", 0)); }  // arth: 0 made for landscape
 
-// A plain text screen, optionally with a QR code on the right.
-void showText(const char *title, const char *const *lines, int n, esp_qrcode_handle_t qr = nullptr) {
-  paint([&](Adafruit_GFX &display) {
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
-    display.setFont(&FreeSansBold18pt7b);
-    display.setCursor(40, 80);
-    display.print(title);
-    display.setFont(&FreeSans12pt7b);
-    for (int i = 0; i < n; i++) {
-      display.setCursor(40, 150 + i * 44);
-      display.print(lines[i]);
+// A plain text screen: a title, short lines (an empty one is a small gap) and optionally a figure 240 px
+// square, the setup QR code or a battery: beside the text in landscape, between title and text in portrait.
+void showText(const char *title, const char *const *lines, int n, std::function<void(Adafruit_GFX &, int, int)> figure = nullptr) {
+  paint([&](Adafruit_GFX &g) {
+    const int F = 240, x = 56, gap = 48;
+    const bool beside = W > H;
+    int end = 0;  // the last line's baseline, from the title's
+    for (int i = 0; i < n; i++) end += !i ? 64 : *lines[i] ? 42 : 21;
+    int y = (H - LARGE_CAP - end - (figure && !beside ? F + 2 * gap : 0)) / 2 + LARGE_CAP;
+    g.fillScreen(GxEPD_WHITE);
+    text(g, Large, title, x, y);
+    if (figure) {
+      figure(g, beside ? W - x - F : (W - F) / 2, beside ? (H - F) / 2 : y + gap);
+      if (!beside) y += F + 2 * gap;
     }
-    if (qr) {
-      int size = esp_qrcode_get_size(qr), px = 240 / size, x0 = W - 40 - size * px, y0 = (H - size * px) / 2;
-      for (int y = 0; y < size; y++)
-        for (int x = 0; x < size; x++)
-          if (esp_qrcode_get_module(qr, x, y)) display.fillRect(x0 + x * px, y0 + y * px, px, px, GxEPD_BLACK);
-    }
+    for (int i = 0; i < n; i++) text(g, Text, lines[i], x, y += !i ? 64 : *lines[i] ? 42 : 21);
   });
+}
+
+// When no stored photo was made for the way the frame stands now.
+void showSendPhotos() {
+  uint32_t seqs[MAX_PHOTOS + 1];
+  bool other = false;  // some were made for the other way
+  for (int i = listPhotos(seqs); i--;) other |= !fits(seqs[i]);
+  const char *const lines[] = {"To add photos, press", "the button on the frame,", "then on the same Wi-Fi",
+                               "open http://frame.local", "", W > H ? "Photos sent for portrait" : "Photos sent for landscape",
+                               "are kept, but not shown", "while I stand this way."};
+  Serial.println("show: send photos");
+  showText("Send me photos", lines, other ? 8 : 4);
 }
 
 // ---------- power ----------
@@ -519,17 +565,13 @@ uint16_t batteryMv() {  // 0 if absent
 
 // ---------- timer wake: next photo, no radio ----------
 
-void drawFlat(Adafruit_GFX &g) {
-  g.fillScreen(GxEPD_WHITE);
-  g.setTextColor(GxEPD_BLACK);
-  g.setFont(&FreeSansBold24pt7b);
-  g.setCursor(60, 150);
-  g.print("Please plug me in");
-  g.setFont(&FreeSansBold18pt7b);
-  g.setCursor(60, 230);
-  g.print("with the USB-C cable.");
-  g.setCursor(60, 310);
-  g.print("I'll be back once I'm charged.");
+void showFlat() {  // a large, nearly empty battery beside the words
+  static const char *const lines[] = {"with the USB-C cable.", "I'll be back once", "I'm charged."};
+  showText("Please plug me in", lines, 3, [](Adafruit_GFX &g, int x, int y) {
+    for (int i = 0; i < 6; i++) g.drawRect(x + 8 + i, y + 70 + i, 200 - 2 * i, 100 - 2 * i, GxEPD_BLACK);
+    g.fillRect(x + 208, y + 100, 16, 40, GxEPD_BLACK);
+    g.fillRect(x + 24, y + 86, 30, 68, GxEPD_RED);
+  });
 }
 
 // A refresh on a flat cell can brown out half-drawn. So at LOW the frame asks once to be charged, then
@@ -542,7 +584,7 @@ bool flat() {
   if (was && mv < CHARGED_MV) return true;
   if (!mv || mv >= LOW_BATTERY_MV) return false;
   prefs.putUChar("screen", 1);  // before the refresh too, in case the cell gives out during it
-  paint(drawFlat);
+  showFlat();
   prefs.putUChar("screen", 1);
   return true;
 }
@@ -553,7 +595,7 @@ uint32_t pinnedToday() {  // the newest photo pinned to today's date, or 0
   gmtime_r(&t, &d);
   uint32_t seqs[MAX_PHOTOS + 1];
   for (int i = listPhotos(seqs); clockSet() && i--;)
-    if ((meta(seqs[i]) & ~KEEP) == (d.tm_mon + 1) * 100 + d.tm_mday) return seqs[i];
+    if ((meta(seqs[i]) & PIN) == (d.tm_mon + 1) * 100 + d.tm_mday && fits(seqs[i])) return seqs[i];
   return 0;
 }
 
@@ -561,7 +603,7 @@ void rotate() {
   uint32_t seqs[MAX_PHOTOS + 1];
   int n = 0;
   for (int i = 0, all = listPhotos(seqs); i < all; i++)
-    if (!(meta(seqs[i]) & ~KEEP)) seqs[n++] = seqs[i];  // pinned photos wait for their day
+    if (!(meta(seqs[i]) & PIN) && fits(seqs[i])) seqs[n++] = seqs[i];  // pinned photos wait for their day
   // Nothing to rotate to. With the date on, or after a pinned day, redraw even one.
   if (n < (prefs.getUChar("date", 0) || prefs.getUChar("screen", 0) ? 1 : 2)) return;
   uint32_t cur = prefs.getUInt("cur", 0), next = seqs[n - 1];
@@ -617,7 +659,7 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
   LittleFS.remove(path);  // the partition has no room for a second copy when the photo store is full
   File f = LittleFS.open(path, "w");
   bool ok = err && f;
-  static uint8_t rows[W];  // three rows, three pixels per byte
+  static uint8_t rows[800];  // three rows (W bytes), three pixels per byte
   for (int y = 0; ok && y < H; y++) {
     float *cur = err + (y & 1) * (W + 2) * 3, *next = err + (~y & 1) * (W + 2) * 3;
     memset(next, 0, (W + 2) * 3 * sizeof(float));
@@ -641,7 +683,7 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
         next[(x + 2) * 3 + c] += e / 16;
       }
     }
-    if (y % 3 == 2) ok = f.write(rows, sizeof rows) == sizeof rows;
+    if (y % 3 == 2) ok = f.write(rows, W) == (size_t)W;
   }
   f.close();
   free(err);
@@ -661,8 +703,11 @@ bool fetchArt(uint32_t deadline) {
   http.setTimeout(5000);
   http.useHTTP10(true);  // no chunked replies: the body is just the bytes
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  String src = "picsum.photos/800/480.jpg?random=" + String((uint32_t)(time(nullptr) / ROTATE_SECONDS));
+  String src = "picsum.photos/" + String(W) + "/" + String(H) + ".jpg?random=" + String((uint32_t)(time(nullptr) / ROTATE_SECONDS));
   String key = prefs.getString("key"), url, label;
+#if ROTATE_SECONDS < 86400
+  if (benchPicsum) key = "";
+#endif
   if (!prefs.getUChar("src", 0)) {  // museum art: a different work from the list each day
     int prev = prefs.getUShort("met", 0), i = esp_random() % (MET_COUNT - 1);
     i += i >= prev;
@@ -674,7 +719,7 @@ bool fetchArt(uint32_t deadline) {
     label = line.substring(bar + 1);
     prefs.putUShort("met", i);
   } else if (key.length()) {
-    String json = http.begin(tls, "https://api.unsplash.com/photos/random?query=landscape&orientation=landscape&client_id=" + key) &&
+    String json = http.begin(tls, "https://api.unsplash.com/photos/random?query=landscape&orientation=" + String(W > H ? "landscape" : "portrait") + "&client_id=" + key) &&
                   http.GET() == 200 ? http.getString() : "";
     http.end();
     int i = json.indexOf("\"raw\":\"");
@@ -684,7 +729,7 @@ bool fetchArt(uint32_t deadline) {
     }
     src = json.substring(i + 7, json.indexOf('"', i + 7));
     src.replace("\\u0026", "&");
-    src += "&w=800&h=480&fit=crop&fm=jpg&q=80";
+    src += "&w=" + String(W) + "&h=" + String(H) + "&fit=crop&fm=jpg&q=80";
   }
   // picsum and Unsplash only send progressive JPEGs, which the ROM decoder cannot read: wsrv.nl, a free
   // image proxy, re-encodes them as baseline. The museum's images are baseline already.
@@ -715,7 +760,12 @@ bool fetchArt(uint32_t deadline) {
   JRESULT r = ok && work ? jd_prepare(&jd, jpegIn, work, 4096, &j) : JDR_PAR;
   ok = r == JDR_OK;  // progressive JPEGs fail here (JDR_FMT3)
   if (ok) {
-    j.h = label.length() && dateMode() != 4 ? H - LABEL_H : H;  // split shows the label beside the picture
+    // Landscape: museum art leaves a strip for its label, except with Split, which shows it beside the
+    // picture. Portrait: museum art keeps its whole width like a print (with Split no taller than 340, to
+    // leave room for the date under its caption); random photos fill the frame, or Split's top 400 rows.
+    bool split = dateMode() == 4, tall = W < H;
+    int whole = (long)jd.height * W / jd.width;
+    j.h = !tall ? (label.length() && !split ? H - LABEL_H : H) : label.length() ? std::min(whole, split ? 340 : H) : split ? SPLIT_H : H;
     int scale = 0;  // the decoder can shrink by 1/2, 1/4, 1/8 while staying at least frame size
     while (scale < 3 && (jd.width >> (scale + 1)) >= W && (jd.height >> (scale + 1)) >= j.h) scale++;
     int sw = jd.width >> scale, sh = jd.height >> scale;
@@ -735,6 +785,7 @@ bool fetchArt(uint32_t deadline) {
   ok = ok && ditherToFile(j.rgb, "/art.bin");
   setCpuFrequencyMhz(80);
   if (ok) prefs.putString("label", label);
+  if (ok) prefs.putUShort("arth", W < H ? j.h : 0);  // which way it was made for, and how tall it is
   free(j.rgb);
   Serial.printf("art: %s at %lu ms\n", ok ? "saved" : "failed, keeping the current picture", millis() - t0);
   return ok;
@@ -762,10 +813,10 @@ void daily() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  if (pin && showFile(photoPath(pin))) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
+  if (pin && showFile(photoPath(pin), meta(pin) & TALL)) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
   else if (show == 2) showToday();
   else if (!art) rotate();
-  else if (fresh || prefs.getUChar("date", 0) || prefs.getUChar("screen", 0)) showFile("/art.bin");  // failed fetch: keep the picture
+  else if (fresh || prefs.getUChar("date", 0) || prefs.getUChar("screen", 0)) showArt();  // failed fetch: keep the picture
 }
 
 // ---------- upload session ----------
@@ -788,7 +839,7 @@ void handleUpload() {
     uint32_t seqs[MAX_PHOTOS + 1];
     int n = listPhotos(seqs), drop = n - MAX_PHOTOS + 1;
     for (int i = 0; i < n && drop > 0; i++)  // make room: drop the oldest that is not kept or pinned
-      if (!meta(seqs[i])) removePhoto(seqs[i]), drop--;
+      if (!(meta(seqs[i]) & (KEEP | PIN))) removePhoto(seqs[i]), drop--;
     full = drop > 0;  // all kept or pinned: refuse
     f = full ? File() : LittleFS.open("/up.tmp", "w");
     got = 0;
@@ -802,8 +853,10 @@ void handleUpload() {
       prefs.putUInt("seq", seq);
       uploaded = LittleFS.rename("/up.tmp", photoPath(seq));
       int pin = server.arg("pin").toInt();  // month * 100 + day
-      if (uploaded && pin % 100 && pin % 100 < 32 && pin > 100 && pin < 1300) prefs.putUShort(metaKey(seq).c_str(), pin);
-      else if (uploaded) showSeq = seq;  // a pinned photo waits for its day
+      if (!(pin % 100 && pin % 100 < 32 && pin > 100 && pin < 1300)) pin = 0;
+      uint16_t m = pin | (server.arg("o") == "1" ? TALL : 0);  // o=1: made for portrait
+      if (uploaded && m) prefs.putUShort(metaKey(seq).c_str(), m);
+      if (uploaded && !pin) showSeq = seq;  // a pinned photo waits for its day
       lastUpload = millis();
       Serial.printf("stored %s, file system %u of %u bytes used\n", photoPath(seq).c_str(), LittleFS.usedBytes(), LittleFS.totalBytes());
     } else {
@@ -845,11 +898,44 @@ if(t=='failed'){m.textContent='That did not work. Check the password and try aga
 catch(x){m.textContent='Look at the frame: in about a minute it shows Connected. If it still shows the setup screen, try again.'}};
 </script></html>)HTML";
 
-bool wifiSetup() {  // true once the frame has joined the home network
+const char *setupPass() {  // different for each frame, worked out from its MAC address
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  static char pass[9], qrText[64], passLine[40];
+  static char pass[9];
   snprintf(pass, sizeof pass, "%02x%02x%02x%02x", mac[2] ^ 0x5a, mac[3] ^ 0xa5, mac[4] ^ 0x3c, mac[5] ^ 0xc3);
+  return pass;
+}
+
+void showSetup() {  // the QR code joins the phone to the frame's network
+  static char qrText[64], passLine[40];
+  snprintf(qrText, sizeof qrText, "WIFI:T:WPA;S:%s;P:%s;;", SETUP_SSID, setupPass());
+  snprintf(passLine, sizeof passLine, "password %s", setupPass());
+  esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+  cfg.display_func = [](esp_qrcode_handle_t qr) {
+    static const char *const lines[] = {"Point your phone's camera", "at this code and tap Join.", "Then choose your Wi-Fi",
+                                        "and type its password.", "", "No camera? Join the Wi-Fi", "network Photo Frame,", passLine};
+    showText("Connect me to Wi-Fi", lines, 8, [qr](Adafruit_GFX &g, int x0, int y0) {
+      int size = esp_qrcode_get_size(qr), px = 240 / size;
+      x0 += (240 - size * px) / 2;
+      y0 += (240 - size * px) / 2;
+      for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+          if (esp_qrcode_get_module(qr, x, y)) g.fillRect(x0 + x * px, y0 + y * px, px, px, GxEPD_BLACK);
+    });
+  };
+  esp_qrcode_generate(&cfg, qrText);
+}
+
+void showConnected(const char *ip) {
+  static char ipLine[48];
+  snprintf(ipLine, sizeof ipLine, "(or http://%s)", ip);
+  const char *const lines[] = {"To add photos, press", "the button on the frame,", "then on the same Wi-Fi",
+                               "open http://frame.local", ipLine};
+  showText("Connected", lines, 5);
+}
+
+bool wifiSetup() {  // true once the frame has joined the home network
+  const char *pass = setupPass();
   WiFi.mode(WIFI_AP_STA);
   String options;
   for (int i = 0, n = WiFi.scanNetworks(); i < n; i++) {
@@ -881,16 +967,7 @@ bool wifiSetup() {  // true once the frame has joined the home network
   setupWeb = &portal;
   Serial.printf("setup network \"%s\" password %s, %d networks seen\n", SETUP_SSID, pass, WiFi.scanComplete());
 
-  snprintf(qrText, sizeof qrText, "WIFI:T:WPA;S:%s;P:%s;;", SETUP_SSID, pass);
-  snprintf(passLine, sizeof passLine, "    password %s", pass);
-  esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-  cfg.display_func = [](esp_qrcode_handle_t qr) {
-    static const char *const lines[] = {"1. Point your phone's camera at", "    this code and tap Join",
-                                        "2. A page opens: choose your Wi-Fi", "    and type its password",
-                                        "No camera? Join Wi-Fi \"Photo Frame\",", passLine};
-    showText("Connect me to Wi-Fi", lines, 6, qr);
-  };
-  esp_qrcode_generate(&cfg, qrText);
+  showSetup();
   led(0, 0, 20);
 
   uint32_t start = millis();
@@ -952,13 +1029,7 @@ void session(bool resetWifi) {
   WiFi.setSleep(true);  // modem sleep between beacons: about a third of the idle current
   startNtp();
 
-  if (setupShown) {
-    static char ipLine[48];
-    snprintf(ipLine, sizeof ipLine, "    (or http://%s)", WiFi.localIP().toString().c_str());
-    const char *const lines[] = {"To add photos:", "1. Press the button on the frame",
-                                 "2. On the same Wi-Fi, open", "    http://frame.local", ipLine};
-    showText("Connected", lines, 5);
-  }
+  if (setupShown) showConnected(WiFi.localIP().toString().c_str());
 
   MDNS.begin("frame");
   MDNS.addService("http", "tcp", 80);
@@ -972,9 +1043,9 @@ void session(bool resetWifi) {
     int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ), n = listPhotos(seqs);  // SOC: the high byte is whole percent
     char json[600];
     int len = snprintf(json, sizeof json,
-             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"date\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
+             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"date\":%u,\"rot\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
              n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
-             prefs.getUChar("src", 0), prefs.getUChar("date", 0), tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
+             prefs.getUChar("src", 0), prefs.getUChar("date", 0), rot, tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
     for (int i = n - 1; i >= 0; i--) len += snprintf(json + len, sizeof json - len, "[%u,%u]%s", seqs[i], meta(seqs[i]), i ? "," : "]}");
     if (!n) strcat(json, "]}");
     server.send(200, "application/json", json);
@@ -986,6 +1057,8 @@ void session(bool resetWifi) {
     prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 2));
     prefs.putUChar("src", server.arg("src") == "1");  // 0 museum art, 1 random photos
     prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 4));
+    if (server.hasArg("rot")) prefs.putUChar("rot", server.arg("rot").toInt() & 3);  // a page from before has none
+    orient(prefs.getUChar("rot", 0));
     prefs.putInt("tz", server.arg("tz") == "auto" ? AUTO_TZ : constrain(server.arg("tz").toInt(), -720, 840));
     prefs.putString("key", key.substring(0, 80));
     changed = true;
@@ -1001,18 +1074,27 @@ void session(bool resetWifi) {
 #endif
 #if ROTATE_SECONDS < 86400
   server.on("/render", HTTP_GET, [] {  // bench: what the panel would show, packed like a photo
-    canvas = new GFXcanvas16(W, H);
+    canvas = new GFXcanvas16(800, 480);  // the panel as it is wired, whichever way the frame stands
     uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     lowBattery = server.hasArg("low");
     benchDate = server.hasArg("date") ? server.arg("date").toInt() : -1;
     benchT = server.arg("t").toInt();
+    if (server.hasArg("rot")) orient(server.arg("rot").toInt());
+    canvas->setRotation(rot);
     if (server.hasArg("label")) prefs.putString("label", server.arg("label"));  // to try long titles
+    if (server.hasArg("src")) prefs.putUChar("src", server.arg("src") == "1");
+    benchPicsum = server.hasArg("picsum");
     active();
-    if (server.arg("w") == "flat") paint(drawFlat);
-    else if (server.arg("w") == "art") showFile("/art.bin");
-    else if (server.arg("w") == "today") paint([](Adafruit_GFX &g) { drawToday(g, benchT); });
-    else showFile(photoPath(server.arg("seq").toInt()));
-    for (int i = 0; i < W * H; i++) {
+    String w = server.arg("w");
+    if (server.hasArg("fetch")) Serial.printf("bench fetch %d\n", fetchArt(millis() + 30000));  // for this way up and date style
+    if (w == "flat") showFlat();
+    else if (w == "art") showArt();
+    else if (w == "today") paint([](Adafruit_GFX &g) { drawToday(g, benchT); });
+    else if (w == "setup") showSetup();
+    else if (w == "connected") showConnected("10.0.0.157");
+    else if (w == "send") showSendPhotos();
+    else showFile(photoPath(server.arg("seq").toInt()), meta(server.arg("seq").toInt()) & TALL);
+    for (int i = 0; i < 800 * 480; i++) {
       int k = 1;
       for (int j = 0; j < 6; j++)
         if (COLORS[j] == canvas->getBuffer()[i]) k = j;
@@ -1022,6 +1104,8 @@ void session(bool resetWifi) {
     free(out);
     benchDate = -1;
     benchT = 0;
+    benchPicsum = false;
+    orient(prefs.getUChar("rot", 0));
     delete canvas;
     canvas = nullptr;
   });
@@ -1089,10 +1173,17 @@ void session(bool resetWifi) {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  if (showSeq) showPhoto(showSeq);
-  else if (art) showFile("/art.bin");
-  else if (changed && prefs.getUChar("show", 0) == 2) showToday();
-  else if (changed) showPhoto(prefs.getUInt("cur", 0));  // redraw with the new date setting
+  if (showSeq && showPhoto(showSeq)) return;
+  if (art && showArt()) return;
+  if (changed && prefs.getUChar("show", 0) == 2 && showToday()) return;
+  if (!changed && !showSeq) return;
+  // Redraw with the new settings (perhaps another way up): the current photo, or the newest made for
+  // this way up, or a screen asking for photos. Never a picture made for the other way.
+  uint32_t seqs[MAX_PHOTOS + 1];
+  if (showPhoto(prefs.getUInt("cur", 0))) return;
+  for (int i = listPhotos(seqs); i--;)
+    if (!(meta(seqs[i]) & PIN) && showPhoto(seqs[i])) return;
+  showSendPhotos();
 }
 
 // Keep a new firmware from the updater on probation; session() confirms it, sleepNow() rolls it back.
@@ -1109,6 +1200,7 @@ void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on logging when no computer is attached
   prefs.begin("frame");
+  orient(prefs.getUChar("rot", 0));
   esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
   esp_ota_get_state_partition(esp_ota_get_running_partition(), &state);
   pending = state == ESP_OTA_IMG_PENDING_VERIFY;

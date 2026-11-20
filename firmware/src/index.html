@@ -110,6 +110,7 @@ svg { flex: none; stroke-linecap: square; stroke-linejoin: miter; stroke-width: 
 .cap { font: 400 15px/1.4 var(--sans); color: var(--muted); margin: 8px 0 0; text-align: left; }
 .strip { display: flex; gap: 6px; overflow-x: auto; padding: 10px 2px 2px; }
 .strip button { flex: 0 0 80px; height: 48px; padding: 0; border: 2px solid transparent; border-radius: 0; overflow: hidden; cursor: pointer; background: var(--surface2); }
+.tall .strip button { flex-basis: 48px; height: 80px; }
 .strip button[aria-current=true] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .strip canvas { width: 100%; height: 100%; display: block; }
 fieldset { border: 0; padding: 0; margin: 22px 0 0; min-width: 0; }
@@ -137,6 +138,19 @@ legend, .lbl { display: block; padding: 0; font: 700 14px/1.3 var(--mono); lette
 .pict i { position: absolute; background: var(--ink); }
 .seg label:has(:checked) .pict { background: var(--muted); }
 .seg label:has(:checked) .pict i { background: var(--bg); }
+/* Which way the frame stands: the frame's shape, with a bar on the edge that is at the bottom in Landscape */
+.rot { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.rot label { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: 64px; padding: 8px 12px; text-align: left; }
+.rot label:nth-child(3) { border-left: 0; }
+.rot label:nth-child(n+3) { border-top: 1.5px solid var(--edge); }
+.rot .pict { flex: none; margin: 0 9px; }
+.rot .tallp { width: 26px; height: 44px; margin: 0 18px; }
+/* Portrait: the picture is 480x800, so the previews and thumbnails stand tall */
+.tall .mat canvas, .tall .looks canvas, .tall .thumb { aspect-ratio: 3/5; }
+.tall .mat { width: 62%; margin-left: auto; margin-right: auto; }
+.tall .grid { grid-template-columns: repeat(3, 1fr); }
+.thumb.other canvas { opacity: .45; }
+.thumb .away { position: absolute; left: 0; right: 0; top: 0; padding: 4px 6px; background: #111; color: #fff; font: 600 12px/1.25 var(--mono); letter-spacing: .04em; text-transform: uppercase; text-align: center; }
 details.dis { border-top: 1px solid var(--rule); }
 details.dis:last-of-type { border-bottom: 1px solid var(--rule); }
 .dis summary { list-style: none; display: flex; align-items: center; gap: 14px; min-height: 64px; cursor: pointer; font-weight: 600; }
@@ -174,7 +188,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 .done #sentT::after { content: "."; color: var(--accent-text); }
 .check { width: 44px; height: 44px; border-radius: 0; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; margin: 0; }
 .check svg { width: 28px; height: 28px; stroke-width: 2.4; }
-#sentMat { margin: 10px 0 0 !important; }
+#sentMat { margin: 10px auto 0 !important; }
 .flash::after { content: ""; position: absolute; inset: 10px; background: #191e21; opacity: 0; animation: flash 1s ease-out; pointer-events: none; }
 @keyframes flash { 0%, 35% { opacity: 1; } 100% { opacity: 0; } }
 dialog { border: 0; padding: 0; color: var(--ink); background: var(--bg); }
@@ -315,6 +329,15 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
         <label><span class="pict"><i style="right:0;top:0;bottom:0;width:17px"></i></span><input type="radio" name="date" value="4">Split</label>
       </div>
     </fieldset>
+    <fieldset><legend>Frame orientation</legend>
+      <div class="seg rot">
+        <label><span class="pict"><i style="left:0;right:0;bottom:0;height:5px"></i></span><input type="radio" name="rot" value="0">Landscape</label>
+        <label><span class="pict"><i style="left:0;right:0;top:0;height:5px"></i></span><input type="radio" name="rot" value="2">Upside down</label>
+        <label><span class="pict tallp"><i style="top:0;bottom:0;right:0;width:5px"></i></span><input type="radio" name="rot" value="1">Turned left</label>
+        <label><span class="pict tallp"><i style="top:0;bottom:0;left:0;width:5px"></i></span><input type="radio" name="rot" value="3">Turned right</label>
+      </div>
+      <p class="hint" id="rotHint"></p>
+    </fieldset>
     <label class="field" for="tz"><span>Time zone</span><select id="tz" name="tz"><option value="auto">Automatic</option></select></label>
     <p class="hint">The date and time are set automatically over the internet.</p>
     <button class="btn primary" id="save" style="margin-top:22px" disabled>Save</button>
@@ -339,6 +362,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 <dialog class="sheet one" id="oneDlg" aria-labelledby="oneH"><div>
   <header><h2 id="oneH">Photo</h2><button class="icon x" type="button" aria-label="Close" data-i="x"></button></header>
   <div class="mat"><canvas id="oneView" width="800" height="480" role="img" aria-label="The photo on the frame"></canvas></div>
+  <p class="hint" id="awayNote"></p>
   <button class="btn primary" id="showNow" type="button">Show this now</button>
   <p class="hint" id="oneMsg" role="status"></p>
   <label class="keep" id="keepRow"><span>Keep on the frame<small>Never removed to make room for new photos</small></span><input type="checkbox" id="keepBox"></label>
@@ -360,10 +384,11 @@ const SATURATION = 1.4, CONTRAST = 1.15;
 
 // DITHER-BEGIN (tools/test_dither.mjs runs this block under node)
 const lum = c => 0.299*c[0] + 0.587*c[1] + 0.114*c[2];
-// RGBA pixels (W*H*4) -> palette index per pixel (W*H), Floyd-Steinberg.
+// RGBA pixels (w wide) -> palette index per pixel, Floyd-Steinberg. W x H is landscape; portrait is H x W.
 // Treatments: 'natural'; 'poster' carries less error, for flatter colour fields; 'duotone' maps
 // brightness to black, the palette index ink, and white.
-function dither(rgba, treat = 'natural', ink = 3) {
+function dither(rgba, treat = 'natural', ink = 3, w = W) {
+  const W = w, H = rgba.length / 4 / w;
   const a = new Float32Array(W * H * 3), duo = treat == 'duotone', carry = treat == 'poster' ? 0.4 : 1;
   const inks = duo ? [0, ink, 1] : [0, 1, 2, 3, 4, 5];
   let mean = 0;
@@ -528,10 +553,11 @@ async function wake(box = $('#napHome'), then) {  // after "Try again": is the f
 }
 function apply(s) {
   stored = s.list; max = s.max; battery = s.battery_pct;
+  if ((s.rot | 0) != rot) orient(s.rot | 0);
   $('#ver').textContent = s.version;
   if (!loaded) {  // fill the form once: a later check must not undo unsaved changes
     const f = $('#settings');
-    f.show.value = s.show; f.src.value = s.src; f.date.value = s.date; f.tz.value = s.tz; f.key.value = s.key;
+    f.show.value = s.show; f.src.value = s.src; f.date.value = s.date; f.rot.value = s.rot | 0; f.tz.value = s.tz; f.key.value = s.key;
     loaded = true; $('#save').disabled = false; settingsShown();
   }
   status();
@@ -539,23 +565,33 @@ function apply(s) {
 
 // ---------- picking, the preview and the three looks ----------
 const work = document.createElement('canvas'), wctx = work.getContext('2d', { willReadFrequently: true });
-work.width = W; work.height = H;
 let picks = [], cur = 0, sendFrom = 0, busy = false, picking = false;
+// Which way the frame stands (0 landscape, 1 turned left, 2 upside down, 3 turned right). The page sends
+// pictures upright as they will be seen, 480x800 in portrait; the frame turns them for its panel.
+// Every canvas that shows a frame picture is turned to match.
+let rot = 0, PW = W, PH = H;
+function orient(r) {
+  rot = r; [PW, PH] = r & 1 ? [H, W] : [W, H];
+  document.body.classList.toggle('tall', PH > PW);
+  for (const c of $$('canvas')) if (c.height > c.width != PH > PW) [c.width, c.height] = [c.height, c.width];
+  if (picks.length && picks[0].w != PW) choose(picks.map(p => p.file));  // picked before the frame answered
+}
 
-// Decode, turn upright, crop to fill 800x480 (a little above centre) and keep only those pixels:
+// Decode, turn upright, crop to fill the frame (a little above centre) and keep only those pixels:
 // a dozen full-size phone photos held at once would exhaust Safari's memory.
 async function crop(file) {
   let img, url;
   try { img = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
   catch (e) { img = new Image(); img.src = url = URL.createObjectURL(file); await img.decode(); }
-  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-  const s = Math.max(W / iw, H / ih), sw = W / s, sh = H / s;
-  wctx.fillStyle = '#fff'; wctx.fillRect(0, 0, W, H);
-  wctx.drawImage(img, (iw - sw) / 2, (ih - sh) * 0.45, sw, sh, 0, 0, W, H);
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height, w = PW, h = PH;
+  const s = Math.max(w / iw, h / ih), sw = w / s, sh = h / s;
+  work.width = w; work.height = h;
+  wctx.fillStyle = '#fff'; wctx.fillRect(0, 0, w, h);
+  wctx.drawImage(img, (iw - sw) / 2, (ih - sh) * 0.45, sw, sh, 0, 0, w, h);
   if (img.close) img.close();
   if (url) URL.revokeObjectURL(url);
-  const px = wctx.getImageData(0, 0, W, H);
-  return { px, auto: dominantInk(px.data), memo: {} };
+  const px = wctx.getImageData(0, 0, w, h);
+  return { px, w, h, file, auto: dominantInk(px.data), memo: {} };
 }
 // The strip follows you: the top of the screen or the sheet in front.
 function dock() {
@@ -566,12 +602,12 @@ for (const d of $$('.sheet')) new MutationObserver(dock).observe(d, { attributeF
 const look = () => $('#look :checked').value, inkSel = () => $('#inks :checked').value;
 function base(p, t = look()) {  // the dithered photo without text, kept so typing never dithers again
   const ink = t == 'duotone' ? +inkSel() || p.auto : 0, key = t + ink;
-  return p.memo[key] || (p.memo[key] = dither(p.px.data, t, ink || p.auto));
+  return p.memo[key] || (p.memo[key] = dither(p.px.data, t, ink || p.auto, p.w));
 }
 // The greeting (red) and caption (black) go in a white band across the top, drawn after dithering.
 const txt = document.createElement('canvas'), tctx = txt.getContext('2d', { willReadFrequently: true });
-txt.width = W; txt.height = H;
-function band(idx) {
+function band(idx, W, H) {
+  txt.width = W; txt.height = H;
   const v = id => $('#' + id).value.trim(), from = v('from');
   const lines = [[v('greet'), 'bold', 56, 3], [v('note'), '', 36, 0], [from && '– ' + from, 'italic', 30, 0]].filter(l => l[0]);
   if (!lines.length) return;
@@ -588,15 +624,17 @@ function band(idx) {
     y += size * 1.25 | 0;
   }
 }
-const final = p => { const idx = base(p).slice(); band(idx); return idx; };
-function draw(canvas, px) {  // full-size pixels into any canvas, smoothed when smaller
+const final = p => { const idx = base(p).slice(); band(idx, p.w, p.h); return idx; };
+function draw(canvas, px) {  // full-size pixels into any canvas, smoothed when smaller, whole (a picture made
+  work.width = px.width; work.height = px.height;  // for the other way up sits small in the middle)
   wctx.putImageData(px, 0, 0);
-  const c = canvas.getContext('2d');
+  const c = canvas.getContext('2d'), s = Math.min(canvas.width / px.width, canvas.height / px.height);
   c.imageSmoothingQuality = 'high';
-  c.drawImage(work, 0, 0, canvas.width, canvas.height);
+  c.clearRect(0, 0, canvas.width, canvas.height);
+  c.drawImage(work, (canvas.width - px.width * s) / 2, (canvas.height - px.height * s) / 2, px.width * s, px.height * s);
 }
-function paint(canvas, idx) {
-  const px = wctx.createImageData(W, H), d = px.data;
+function paint(canvas, idx, w = PW) {
+  const px = wctx.createImageData(w, idx.length / w), d = px.data;
   for (let i = 0; i < idx.length; i++) { const c = PALETTE[idx[i]]; d[i*4] = c[0]; d[i*4+1] = c[1]; d[i*4+2] = c[2]; d[i*4+3] = 255; }
   draw(canvas, px);
 }
@@ -627,11 +665,13 @@ function labels() {
 const pick = $('#pick');
 pick.onclick = () => picking = true;
 pick.oncancel = () => { picking = false; };
-pick.onchange = async () => {
+pick.onchange = () => {
   const files = [...pick.files];
   picking = false;
   pick.value = '';
-  if (!files.length) return;
+  if (files.length) choose(files);
+};
+async function choose(files) {
   $('#homeMsg').textContent = files.length > 1 ? 'Getting your photos ready…' : 'Getting your photo ready…';
   const got = [];
   for (const f of files) try { got.push(await crop(f)); } catch (e) {}
@@ -647,7 +687,7 @@ pick.onchange = async () => {
     b.type = 'button';
     b.setAttribute('aria-label', `Photo ${i + 1}`);
     b.setAttribute('aria-current', i == 0);
-    b.innerHTML = '<canvas width="160" height="96"></canvas>';
+    b.innerHTML = `<canvas width="${p.w / 5}" height="${p.h / 5}"></canvas>`;
     draw(b.firstChild, p.px);
     b.onclick = () => { if (busy) return; cur = i; $$('#strip button').forEach((y, j) => y.setAttribute('aria-current', j == i)); caption(); redraw(true); };
     strip.append(b);
@@ -659,7 +699,7 @@ pick.onchange = async () => {
   redraw(true);
   // Restart the frame's idle time now, and find out before any typing if it has gone to sleep.
   api('/status', {}, 8000, 'json').then(apply, () => nap($('#sendMsg'), SEND_ASLEEP, () => wake($('#sendMsg'))));
-};
+}
 function caption() {
   $('#viewCap').textContent = picks.length > 1 ? `Photo ${cur + 1} of ${picks.length}. Tap another below to see it. The frame shows the last one first.`
     : 'How it will look on the frame';
@@ -686,7 +726,7 @@ $('#back').onclick = () => { picks = []; screen('home'); };
 // ---------- sending ----------
 const SEND_ASLEEP = 'The frame has gone to sleep. Your photos are still here. Press the button on the frame, then tap Try again.';
 async function send() {
-  const n = picks.length, msg = $('#sendMsg'), pin = pinned() ? `?pin=${$('#month').value * 100 + +$('#day').value}` : '';
+  const n = picks.length, msg = $('#sendMsg'), pin = pinned() ? $('#month').value * 100 + +$('#day').value : 0;
   stopThumbs();
   busy = true;
   status();
@@ -704,7 +744,7 @@ async function send() {
       paint($('#view'), idx);
       const form = new FormData();
       form.append('photo', new Blob([pack(idx)]), 'photo.bin');
-      await api('/upload' + pin, { method: 'POST', body: form }, 30000);
+      await api(`/upload?pin=${pin}&o=${+(picks[sendFrom].h > picks[sendFrom].w)}`, { method: 'POST', body: form }, 30000);
     }
     $('#barI').style.width = '100%';
     finished = true;
@@ -760,6 +800,10 @@ function ask(text, ok) {
 // ---------- settings ----------
 const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today'], DATES = ['no date', 'date in the corner', 'date banner', 'big date', 'split with the date'];
 const SHOW_HINTS = ['Your photos, a different one each day.', 'A new picture from the internet every day.', 'A calendar page with the date and the moon.'];
+const ROTS = ['', 'turned left', 'upside down', 'turned right'], ROT_HINTS = ['The usual way, wider than tall.',
+  'Standing tall, a quarter turn to the left (anticlockwise) from Landscape.', 'Half a turn from Landscape.',
+  'Standing tall, a quarter turn to the right (clockwise) from Landscape.'];
+const way = tall => tall ? 'portrait' : 'landscape';
 for (const m of [-720,-660,-600,-570,-540,-480,-420,-360,-300,-240,-210,-180,-120,-60,0,60,120,180,210,240,270,300,330,345,360,390,420,480,525,540,570,600,630,660,720,765,780,840]) {
   const a = Math.abs(m);
   form.tz.add(new Option(`UTC${m < 0 ? '−' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`, m));
@@ -769,7 +813,10 @@ function settingsShown() {  // hidden fields are still sent, so Save never forge
   $('#showHint').textContent = SHOW_HINTS[show] || '';
   $('#artset').hidden = show != 1;
   $('#keyset').hidden = show != 1 || form.src.value != 1;
-  $('#setRow').textContent = loaded ? `${SHOWS[show]} · ${DATES[form.date.value]}` : '';
+  $('#setRow').textContent = loaded ? [SHOWS[show], DATES[form.date.value], ROTS[form.rot.value]].filter(Boolean).join(' · ') : '';
+  const r = form.rot.value, other = stored.filter(p => !tallOf(p[1]) != !(r & 1)).length;
+  $('#rotHint').textContent = `${ROT_HINTS[r]} The black bar marks the edge that is at the bottom in Landscape. Save, then turn the frame to match.` +
+    (other ? ` ${other == 1 ? 'One photo' : `${other} photos`} on the frame ${other == 1 ? 'was' : 'were'} sent for ${way(!(r & 1))}: kept, but not shown this way.` : '');
 }
 form.onchange = settingsShown;
 $('#eye').onclick = () => {
@@ -820,7 +867,8 @@ function unpack(b) {  // the reverse of pack(); a byte above 215 is three white 
   }
   return idx;
 }
-const pinOf = meta => meta & 0x7fff, kept = meta => meta & 0x8000;
+const pinOf = meta => meta & 0x3fff, kept = meta => meta & 0x8000, tallOf = meta => meta & 0x4000;
+const away = meta => !tallOf(meta) != !(PH > PW);  // sent for the other way up: kept, never shown sideways
 const dayOf = (pin, len) => `${pin % 100} ${MONTHS[(pin / 100 | 0) - 1].slice(0, len)}`;
 function grid() {
   const g = $('#grid');
@@ -832,12 +880,12 @@ function grid() {
   for (const [seq, meta] of stored) {
     const b = document.createElement('button'), pin = pinOf(meta);
     b.type = 'button';
-    b.className = 'thumb';
+    b.className = away(meta) ? 'thumb other' : 'thumb';
     b.dataset.seq = seq;
-    b.setAttribute('aria-label', 'Photo' + (kept(meta) ? ', kept' : '') + (pin ? `, shown on ${dayOf(pin)}` : ''));
+    b.setAttribute('aria-label', 'Photo' + (kept(meta) ? ', kept' : '') + (pin ? `, shown on ${dayOf(pin)}` : '') + (away(meta) ? `, sent for ${way(tallOf(meta))}` : ''));
     if (selecting) b.setAttribute('aria-pressed', sel.has(seq));
-    b.innerHTML = `<canvas width="400" height="240"></canvas><span class="badge">${kept(meta) && !pin ? `<span>${ic('star', 12)}Kept</span>` : ''}${pin ? `<span>${ic('cal', 12)}${dayOf(pin, 3)}</span>` : ''}</span>${selecting ? `<span class="tick">${sel.has(seq) ? ic('check', 18) : ''}</span>` : ''}`;
-    if (bytes[seq]) paint(b.firstChild, unpack(bytes[seq]));
+    b.innerHTML = `<canvas width="${PW / 2}" height="${PH / 2}"></canvas>${away(meta) ? `<span class="away">Sent for ${way(tallOf(meta))}</span>` : ''}<span class="badge">${kept(meta) && !pin ? `<span>${ic('star', 12)}Kept</span>` : ''}${pin ? `<span>${ic('cal', 12)}${dayOf(pin, 3)}</span>` : ''}</span>${selecting ? `<span class="tick">${sel.has(seq) ? ic('check', 18) : ''}</span>` : ''}`;
+    if (bytes[seq]) paint(b.firstChild, unpack(bytes[seq]), tallOf(meta) ? H : W);
     b.onclick = () => selecting ? (sel.has(seq) ? sel.delete(seq) : sel.add(seq), grid()) : openOne(seq);
     g.append(b);
   }
@@ -855,8 +903,8 @@ async function thumbs() {
     try { bytes[seq] = new Uint8Array(await api(`/photo?seq=${seq}`, {}, 15000, 'arrayBuffer')); }
     catch (e) { if (my == loading) photosAsleep(); return; }
     if (my != loading) return;
-    const c = $(`.thumb[data-seq="${seq}"] canvas`);
-    if (c) paint(c, unpack(bytes[seq]));
+    const c = $(`.thumb[data-seq="${seq}"] canvas`), meta = (stored.find(p => p[0] == seq) || [])[1];
+    if (c) paint(c, unpack(bytes[seq]), tallOf(meta) ? H : W);
   }
 }
 const stopThumbs = () => loading++;
@@ -893,8 +941,10 @@ function openOne(seq) {
   $('#keepRow').hidden = !!pin;
   $('#keepBox').checked = !!kept(meta);
   $('#pinNote').textContent = pin ? `Shown on ${dayOf(pin)} every year. Photos with a date are never removed to make room.` : '';
+  $('#showNow').hidden = !!away(meta);
+  $('#awayNote').textContent = away(meta) ? `Sent for ${way(tallOf(meta))}, so the frame does not show it while it stands in ${way(PH > PW)}. Delete it, or set Frame orientation back in Frame settings.` : '';
   const c = $('#oneView');
-  if (bytes[seq]) paint(c, unpack(bytes[seq])); else c.getContext('2d').clearRect(0, 0, W, H);
+  if (bytes[seq]) paint(c, unpack(bytes[seq]), tallOf(meta) ? H : W); else c.getContext('2d').clearRect(0, 0, c.width, c.height);
   $('#oneDlg').showModal();
 }
 $('#oneDlg').onclose = () => $('#phDlg').open && thumbs();
