@@ -1185,7 +1185,10 @@ void session(bool resetWifi) {
     String a = server.arg("do");
     if (!LittleFS.exists(photoPath(seq))) return server.send(404);
     if (a == "delete") removePhoto(seq);
-    else if (a == "show") showSeq = seq;
+    else if (a == "show") {  // "Show now" means now: end the session as if the page had been closed
+      showSeq = seq;
+      byeAt = millis();
+    }
     else prefs.putUShort(metaKey(seq).c_str(), a == "keep" ? meta(seq) | KEEP : meta(seq) & ~KEEP);
     server.send(200, "text/plain", "ok");
   });
