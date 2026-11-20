@@ -82,7 +82,7 @@ pio run -e dev -t upload
 
 Two warnings:
 
-- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app (the current build is 1,119,821 bytes, 63% of it, with the upload page about 49 KB of that), a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Wi-Fi setup screen again.
+- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app (the current build is 1,213,536 bytes, 69% of it, with the upload page about 59 KB and the date fonts about 85 KB of that), a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Wi-Fi setup screen again.
 - Every USB upload resets `otadata` to start the frame app. If you flash the updater while the frame app slot holds a broken image, flash the frame app afterwards.
 - On this board, two resets in quick succession enter the UF2 bootloader. If the board stops running your firmware after a double tap of reset, that is why.
 
