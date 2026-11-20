@@ -83,7 +83,7 @@ pio run -e dev -t upload
 
 Two warnings:
 
-- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app (the current build is 1,213,536 bytes, 69% of it, with the upload page about 59 KB and the date fonts about 85 KB of that), a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Wi-Fi setup screen again.
+- Flashing replaces the Feather's partition table with `firmware/partitions.csv`: a 1.69 MB slot for the frame app (the current build is 1,207,792 bytes, 68% of it, with the upload page about 66 KB and the Inter fonts about 85 KB of that), a 768 KB slot for the updater and a 1.5 MB `photos` partition. Coming from the earlier one-slot table, the first flash erases the stored photos, and the Wi-Fi network and settings may be lost too (on the bench they were): the frame then shows its Wi-Fi setup screen again.
 - Every USB upload resets `otadata` to start the frame app. If you flash the updater while the frame app slot holds a broken image, flash the frame app afterwards.
 - On this board, two resets in quick succession enter the UF2 bootloader. If the board stops running your firmware after a double tap of reset, that is why.
 
@@ -169,43 +169,42 @@ It checks that a solid field of each ink dithers to that ink, and that a gradien
 
 ## Power
 
-These figures were measured on the bench with a Nordic PPK2 at 3.8 V on the battery pin.
+Measured on the bench on 20 November 2026 with a Nordic PPK2 feeding the battery pin at 3.8 V, with USB disconnected, on the firmware in this repository (`864d027`). The recorder (`ppkrec2.py`, not in the repository) timestamps each chunk of samples as it arrives, because the PPK2 stream drops about 60% of its samples. Sessions were started by switching the profiler on (a power-on, which runs the same `session()` as a button press). The phone's part was played by curl from a Mac, faster than a person. Each figure is the range of two or more runs, except where it says once.
 
-| Measured | Value |
-| --- | --- |
-| Deep sleep | 22 uA |
-| One photo rotation (a ~30 s colour refresh) | about 0.5 mAh |
-| Upload session, first 30 s after power-on, page idle | about 115 mA (200 mA for the first 5 s after joining Wi-Fi, then about 90 mA) |
-| Daily wake, Date on, My photos (Wi-Fi, NTP, time zone lookup, refresh) | 0.71 to 0.80 mAh, 42 to 52 s awake |
-| Daily wake, Museum art (also download, decode, dither) | 1.05 to 1.72 mAh, 46 to 64 s awake |
-| Daily wake, Today | 0.53 to 0.61 mAh, 43 to 51 s awake |
-| Daily wake with a flat battery (no refresh, no Wi-Fi) | about 0.5 s awake |
-| Daily wake, Random artwork (earlier firmware) | 1.26 mAh, 51 s awake |
+| Measured | Build | Charge | Awake |
+| --- | --- | --- | --- |
+| Deep sleep, 6 minutes after a redraw (twice) and after a session (once) | production | 22.9 to 23.1 uA | |
+| Button session: page opened, one photo sent, page closed, then the redraw | production | 1.62 to 1.67 mAh | 58 s |
+| of which the session itself (to 2 s after the page closed) | production | 0.68 to 0.69 mAh | 15.5 s |
+| of which the redraw, with Wi-Fi shutting down and the light breathing | production | 0.93 to 0.97 mAh | 42 to 43 s |
+| Session left untouched until it times out (3 minutes idle) | production | 5.27 to 5.30 mAh | 191 s |
+| Settings saved: the session, then the redraw 5 s later | production | 1.42 to 1.51 mAh | 53 to 55 s |
+| of which the redraw | production | 0.86 to 0.90 mAh | 41 to 42 s |
+| Nightly wake, My photos, date off (radio off, light off; 3 wakes) | dev | 0.66 to 0.78 mAh | 35 to 38 s |
+| Nightly wake, My photos with the date (Wi-Fi, NTP, time zone) | dev | 0.63 to 0.81 mAh | 40 to 41 s |
+| Nightly wake, Museum art (also download, decode, dither) | dev | 1.11 to 1.15 mAh | 45 s |
+| Nightly wake, Random photos (Unsplash with a key, through wsrv.nl) | dev | 1.07 to 1.11 mAh | 48 to 49 s |
+| Nightly wake, Today page (3 wakes) | dev | 0.44 to 0.51 mAh | 36 to 38 s |
 
-The daily-wake rows were measured with the bench build (the same `daily()` code, waking every minute); each range is three or more wakes. Most of the spread is the NTP request, which lwIP sends after a random 0 to 5 seconds, and for museum art the size of the image (50 to 450 KB). For comparison, a radio-off rotation measured 0.42 mAh. So the date costs about 0.3 mAh a day (about 120 mAh a year) and Museum art about 0.9 mAh a day (about 340 mAh a year) on top of the plain rotation. Both add one Wi-Fi connection a day, and the frame wakes at the same time each night instead of every 24 hours from the last wake.
+"dev" is the `dev` environment, which runs the same `daily()` and `rotate()` code but wakes every 60 seconds, so several nightly wakes fit in a few minutes; the session at the start of each dev recording was left out. The charge of a redraw depends on the picture (the panel draws more for some images than others), which is why a date wake measured below a radio-off one: the Wi-Fi visit itself adds about 4 to 5 s at about 150 mA, roughly 0.2 mAh (read from the trace, not measured separately). Museum art with the date on costs the same as without, because the art already needs the Wi-Fi visit.
 
-The light costs little either way. Measured on the radio-off rotation of two photos (the charge depends on the picture: 0.42 and 0.62 mAh with the old steady amber light, three wakes each), the breathing light, which wakes from light sleep every 250 ms instead of every second to step its brightness, measured 0.43 and 0.63 mAh (+1 to 2%), and with the light off, as on the nightly change, 0.41 and 0.61 mAh.
+A redraw has three parts: about 8 s near 100 mA while the picture is sent to the panel, about 10 s near 27 mA, and about 14 s at 35 to 85 mA (depending on the picture) while the inks are driven, with the chip in light sleep during both waits. After a session, Wi-Fi shutting down adds about 5 s at 100 to 220 mA, which is most of why that redraw costs more than a nightly one.
 
-At about 95 mA, the full 3-minute upload window costs about 5 mAh, and a typical quick upload about 2 mAh. Closing the page ends the session at once instead of after 3 idle minutes.
+Not measured in this run: the frame at 3.5 V and 4.1 V (the profiler dropped off USB during the 3.5 V run), the 10-minute Wi-Fi setup (the firmware can only enter it by forgetting the stored network), the breathing light against the unattended path on the same picture, and a second 5-minute floor after a session.
 
-The session draws 200 mA for its first 5 seconds or so after joining Wi-Fi because the radio does not enter modem sleep yet (the trace has no beacon gaps). Without mDNS it measured the same, so mDNS is not the cause. After that, the floor is about 84 mA with a short burst at every beacon (about every 100 ms): the radio sleeps between beacons, but the CPU never does.
+### A year on a 2000 mAh cell
 
-Joining the access point of the last wake directly (cached channel and BSSID) was measured and not kept: joining took 2.3 s either way (the stored network already carries its channel), and the charge per wake was the same. A visit to the updater that times out after 5 minutes measured 9.7 mAh (about 98 mA while serving).
+From the table above, with these assumptions: the frame stops refreshing at 3.4 V, so about 90% of the cell (1800 mAh) is usable; one upload visit a week at a person's pace, about a minute with the page open (60 s at the measured 99 mA, plus a 0.97 mAh redraw: about 2.6 mAh, 140 mAh a year); LiPo self-discharge of 3% of capacity a month (720 mAh a year), an assumption, not a measurement. Deep sleep at 23 uA is 200 mAh a year.
 
-Estimate for one year, using the figures above:
+| Profile | Nightly wakes | Total a year | With self-discharge | Left of 1800 mAh |
+| --- | --- | --- | --- | --- |
+| My photos, date off, one upload a week | 240 to 285 mAh | 580 to 625 mAh | 1300 to 1345 mAh | 455 to 500 mAh |
+| My photos with the date, one upload a week | 230 to 295 mAh | 570 to 635 mAh | 1290 to 1355 mAh | 445 to 510 mAh |
+| Museum art with the date, one upload a week | 405 to 420 mAh | 745 to 760 mAh | 1465 to 1480 mAh | 320 to 335 mAh |
 
-| Use | Charge per year |
-| --- | --- |
-| Deep sleep | ~190 mAh |
-| One rotation per day | ~180 mAh |
-| One upload session per week | ~260 mAh |
-| Total | ~630 mAh |
-| Total with Date on | ~730 mAh |
-| Total with Museum art | ~940 mAh |
+All three clear a year: without self-discharge by more than 1000 mAh, with the assumed self-discharge by 320 to 510 mAh (18 to 28% of the usable charge). Every saved setting adds about 1.5 mAh and every session left open until it times out about 5.3 mAh. This is an estimate from bench measurements, not a year-long test.
 
-LiPo self-discharge (not measured, typically a few percent a month) comes on top. A 2000 mAh cell should comfortably pass a year. This is an estimate from bench measurements, not a year-long test.
-
-One non-obvious finding: the panel's control lines must be held low whenever the panel is not being redrawn. Left floating or high, the display board drew 0.85 mA asleep instead of 22 uA. `panelOff()` in `main.cpp` ends SPI, drives CS, DC, RST, clock and data low and latches them through deep sleep. If you use a different panel board, check this first if your sleep current is far above expectations.
+One non-obvious finding: the panel's control lines must be held low whenever the panel is not being redrawn. Left floating or high, the display board drew far more asleep. `panelOff()` in `main.cpp` ends SPI, drives CS, DC, RST, clock and data low and latches them through deep sleep. If you use a different panel board, check this first if your sleep current is far above expectations.
 
 ## Limits
 
