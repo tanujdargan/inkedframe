@@ -12,7 +12,6 @@
 #include <Arduino.h>
 #include <ESPmDNS.h>
 #include <Fonts/FreeSans12pt7b.h>
-#include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
 #include <GxEPD2_7C.h>
@@ -32,6 +31,7 @@
 #include <esp_wifi.h>
 #include <qrcode.h>
 #include <rom/tjpgd.h>  // the JPEG decoder in the chip's ROM: costs no flash
+#include "fonts.h"
 #include "met.h"
 
 #ifndef ROTATE_SECONDS
@@ -221,9 +221,18 @@ void displayBegin() {
   display.setFullWindow();
 }
 
-#if ROTATE_SECONDS < 86400  // bench builds: GET /render draws into memory instead, to look at it on a computer
-GFXcanvas16 *canvas;
+#if ROTATE_SECONDS < 86400  // bench builds: GET /render draws into memory instead, to look at it on a computer,
+GFXcanvas16 *canvas;         // and with ?date= and ?t= in another date style and on another day, without saving them
+int benchDate = -1;
+time_t benchT;
 #endif
+
+int dateMode() {  // 0 off, 1 corner, 2 banner, 3 big, 4 split
+#if ROTATE_SECONDS < 86400
+  if (benchDate >= 0) return benchDate;
+#endif
+  return prefs.getUChar("date", 0);
+}
 
 // One refresh. GxEPD2 draws a quarter of the panel at a time, so draw() runs once per quarter.
 template <class F> void paint(F draw) {
@@ -247,56 +256,93 @@ void drawBattery(Adafruit_GFX &g) {  // top right: an almost empty battery
   g.fillRect(W - 72, 28, 9, 16, GxEPD_RED);
 }
 
-// Today's date in black on white, so it reads over any picture.
-void drawDate(Adafruit_GFX &display, int H) {  // H: the bottom of the picture
-  int mode = prefs.getUChar("date", 0);
+// Text with its ink, not its cursor, at x: left edge (align -1), centre (0) or right edge (1). y is the
+// baseline, or the top of the digits for the Num fonts. Returns the ink's width.
+int ink(Adafruit_GFX &g, const GFXfont &f, const char *s, int16_t *x1 = nullptr) {  // width
+  int16_t x, y1;
+  uint16_t w, h;
+  g.setFont(&f);
+  g.setTextWrap(false);
+  g.getTextBounds(s, 0, 0, x1 ? x1 : &x, &y1, &w, &h);
+  return w;
+}
+int text(Adafruit_GFX &g, const GFXfont &f, const char *s, int x, int y, int align = -1) {
+  int16_t x1;
+  int w = ink(g, f, s, &x1);
+  g.setTextColor(GxEPD_BLACK);
+  g.setCursor(x - x1 - (align + 1) * w / 2, y);
+  g.print(s);
+  return w;
+}
+String fit(Adafruit_GFX &g, const GFXfont &f, String s, int w) {  // shortened with "..." to fit w
+  while (s.length() > 4 && ink(g, f, s.c_str()) > w) {
+    s = s.substring(0, s.length() - 4);
+    s.trim();
+    s += "...";
+  }
+  return s;
+}
+const int SMALL_CAP = 16, TEXT_CAP = 22, LARGE_CAP = 29, NUM100 = 100, NUM150 = 150;  // cap heights of fonts.h
+
+// Up to two lines of s, wrapped at spaces to fit w, ending at baseline y. Returns the first baseline.
+int wrap2(Adafruit_GFX &g, const GFXfont &f, String s, int x, int y, int w, int lead) {
+  int cut = s.length();
+  while (ink(g, f, s.substring(0, cut).c_str()) > w && s.lastIndexOf(' ', cut - 1) > 0) cut = s.lastIndexOf(' ', cut - 1);
+  String rest = s.substring(cut);
+  rest.trim();
+  if (rest.length()) y -= lead;
+  text(g, f, fit(g, f, s.substring(0, cut), w).c_str(), x, y);
+  if (rest.length()) text(g, f, fit(g, f, rest, w).c_str(), x, y + lead);
+  return y;
+}
+
+// Today's date in black on white, so it reads over any picture. Split: the right part of the frame.
+void drawDate(Adafruit_GFX &g, int H, bool label) {  // H: the bottom of the picture
+  int mode = dateMode();
   time_t t = localNow();
+#if ROTATE_SECONDS < 86400
+  if (benchT) t = benchT;
+#endif
   if (!mode || !clockSet()) return;
   tm d;
   gmtime_r(&t, &d);
-  char day[12], mon[12], s[40];
+  char day[12], mon[12], num[4], s[40];
   strftime(day, sizeof day, "%A", &d);
   strftime(mon, sizeof mon, "%B", &d);
-  int16_t x1, y1, x2, y2, x3, y3;
-  uint16_t w, h, w2, h2, w3, h3;
-  display.setTextColor(GxEPD_BLACK);
+  snprintf(num, sizeof num, "%d", d.tm_mday);
   if (mode == 1) {  // corner: "Thu 19 Nov", bottom right
     snprintf(s, sizeof s, "%.3s %d %.3s", day, d.tm_mday, mon);
-    display.setFont(&FreeSansBold12pt7b);
-    display.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-    display.fillRect(W - 20 - w - 24, H - 20 - h - 24, w + 24, h + 24, GxEPD_WHITE);
-    display.setCursor(W - 20 - 12 - w - x1, H - 20 - 12 - h - y1);
-    display.print(s);
-  } else if (mode == 2) {  // banner: full-width strip along the bottom
-    snprintf(s, sizeof s, "%s %d %s %d", day, d.tm_mday, mon, d.tm_year + 1900);
-    display.setFont(&FreeSansBold18pt7b);
-    display.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-    display.fillRect(0, H - 64, W, 64, GxEPD_WHITE);
-    display.setCursor((W - w) / 2 - x1, H - 32 - y1 / 2);
-    display.print(s);
-  } else {  // big: large day number, month and weekday beside it, bottom left
-    snprintf(s, sizeof s, "%d", d.tm_mday);
-    display.setFont(&FreeSansBold18pt7b);
-    display.getTextBounds(mon, 0, 0, &x2, &y2, &w2, &h2);
-    display.setFont(&FreeSans12pt7b);
-    display.getTextBounds(day, 0, 0, &x3, &y3, &w3, &h3);
-    display.setFont(&FreeSansBold24pt7b);
-    display.setTextSize(2);
-    display.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-    int x = 20 + 16, y = H - 20 - 16 - h - y1;  // number baseline
-    display.fillRect(20, H - 20 - 32 - h, 32 + w + 20 + std::max(w2, w3), 32 + h, GxEPD_WHITE);
-    display.setCursor(x - x1, y);
-    display.print(s);
-    display.setTextSize(1);
-    display.setFont(&FreeSansBold18pt7b);
-    display.setCursor(x + w + 20 - x2, y + y1 - y2);  // tops level with the number's
-    display.print(mon);
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(x + w + 20 - x3, y);
-    display.print(day);
+    int w = ink(g, Text, s);
+    g.fillRect(W - 24 - 18 - w - 18, H - 24 - 16 - TEXT_CAP - 16, w + 36, TEXT_CAP + 32, GxEPD_WHITE);
+    text(g, Text, s, W - 24 - 18, H - 24 - 16, 1);
+  } else if (mode == 2) {  // banner: weekday on the left, the date on the right
+    snprintf(s, sizeof s, "%d %s %d", d.tm_mday, mon, d.tm_year + 1900);
+    g.fillRect(0, H - 64, W, 64, GxEPD_WHITE);
+    text(g, Text, day, 32, H - 32 + TEXT_CAP / 2);
+    text(g, Text, s, W - 32, H - 32 + TEXT_CAP / 2, 1);
+  } else if (mode == 3) {  // big: the day number, month and weekday beside it, bottom left
+    int top = H - 24 - 26 - NUM100, x = 24 + 26 + ink(g, Num100, num) + 22, mw = std::max(ink(g, Large, mon), ink(g, Text, day));
+    g.fillRect(24, top - 26, x + mw + 26 - 24, NUM100 + 52, GxEPD_WHITE);
+    text(g, Num100, num, 24 + 26, top);
+    text(g, Large, mon, x, top + LARGE_CAP);
+    text(g, Text, day, x, top + NUM100);
+  } else {  // split: the picture's middle on the left, the date in a white column on the right
+    const int x = 480 + 40, gap = label ? 22 : 40, top = label ? 28 : (::H - 3 * gap - 2 * LARGE_CAP - NUM150 - TEXT_CAP) / 2;
+    g.fillRect(480, 0, W - 480, ::H, GxEPD_WHITE);
+    text(g, Large, day, x, top + LARGE_CAP);
+    text(g, Num150, num, x, top + LARGE_CAP + gap);
+    text(g, Large, mon, x, top + LARGE_CAP + 2 * gap + NUM150 + LARGE_CAP);
+    snprintf(s, sizeof s, "%d", d.tm_year + 1900);
+    text(g, Text, s, x, top + 3 * gap + 2 * LARGE_CAP + NUM150 + TEXT_CAP);
+    if (label) {  // museum art: title and artist at the bottom of the column, under a short rule
+      String l = prefs.getString("label");
+      int y = wrap2(g, Small, l.substring(0, l.indexOf('|')), x, ::H - 36 - 28, W - 40 - x, 26);
+      text(g, Small, fit(g, Small, l.substring(l.indexOf('|') + 1), W - 40 - x).c_str(), x, ::H - 36);
+      g.fillRect(x, y - SMALL_CAP - 16, 40, 2, GxEPD_BLACK);
+    }
   }
   static bool logged;
-  if (!logged) Serial.printf("date mode=%d \"%s\" (%s %s)\n", mode, s, day, mon);
+  if (!logged) Serial.printf("date mode=%d %s %s %s\n", mode, day, num, mon);
   logged = true;
 }
 
@@ -304,18 +350,12 @@ void drawDate(Adafruit_GFX &display, int H) {  // H: the bottom of the picture
 void drawLabel(Adafruit_GFX &g) {
   String l = prefs.getString("label"), t = l.substring(0, l.indexOf('|')), a = l.substring(l.indexOf('|') + 1);
   if (a.length()) a = ", " + a;
-  int16_t x1, y1;
-  uint16_t tw, aw, h;
   g.fillRect(0, H - LABEL_H, W, LABEL_H, GxEPD_WHITE);
-  g.setTextColor(GxEPD_BLACK);
-  g.setFont(&FreeSans12pt7b);
-  g.getTextBounds(a, 0, 0, &x1, &y1, &aw, &h);
-  g.setFont(&FreeSansBold12pt7b);
-  while (g.getTextBounds(t, 0, 0, &x1, &y1, &tw, &h), tw + aw > W - 40 && t.length() > 8) t = t.substring(0, t.length() - 4) + "...";
-  g.setCursor((W - tw - aw) / 2 - x1, H - 18);
-  g.print(t);
-  g.setFont(&FreeSans12pt7b);
-  g.print(a);
+  int aw = ink(g, Small, a.c_str());
+  t = fit(g, SmallBold, t, W - 64 - aw);
+  text(g, SmallBold, t.c_str(), (W - ink(g, SmallBold, t.c_str()) - aw) / 2, H - LABEL_H / 2 + SMALL_CAP / 2);
+  g.setFont(&Small);
+  g.print(a);  // straight after the title
 }
 
 bool showFile(const String &path) {
@@ -324,40 +364,21 @@ bool showFile(const String &path) {
   Serial.printf("show %s\n", path.c_str());
   paint([&](Adafruit_GFX &g) {
     static uint8_t rows[W];  // three rows: 800 is not a multiple of 3, but 3 x 800 is
+    int dx = dateMode() == 4 && clockSet() ? 160 : 0;  // split: the middle 480 columns, on the left
     f.seek(0);
     for (int y = 0; y < H; y += 3) {
       f.read(rows, sizeof rows);
       for (int i = 0; i < 3 * W; i++) {
         uint8_t b = rows[i / 3], c = i % 3 == 0 ? b / 36 : i % 3 == 1 ? b / 6 % 6 : b % 6;
-        g.drawPixel(i % W, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
+        g.drawPixel(i % W - dx, y + i / W, b < 216 ? COLORS[c] : GxEPD_WHITE);  // uploads are untrusted
       }
     }
-    bool label = path == "/art.bin" && prefs.getString("label").length();
-    if (label) drawLabel(g);
-    drawDate(g, label ? H - LABEL_H : H);
+    bool label = path == "/art.bin" && prefs.getString("label").length(), strip = label && !dx;
+    if (strip) drawLabel(g);
+    drawDate(g, strip ? H - LABEL_H : H, label);
     drawBattery(g);
   });
   return true;
-}
-
-// Text k times larger than the font. setTextSize() turns each font pixel into a k x k block; this
-// samples the glyphs smoothly instead, so curves stay curves.
-void drawBig(Adafruit_GFX &g, const GFXfont &f, const char *s, int x, int y, int k, uint16_t color) {
-  for (; *s; s++) {
-    const GFXglyph &q = f.glyph[*s - f.first];
-    auto ink = [&](int gx, int gy) {
-      int i = gy * q.width + gx;
-      return gx >= 0 && gy >= 0 && gx < q.width && gy < q.height ? f.bitmap[q.bitmapOffset + i / 8] >> (7 - i % 8) & 1 : 0;
-    };
-    for (int py = 0; py < q.height * k; py++)
-      for (int px = 0; px < q.width * k; px++) {
-        float fx = (px + 0.5f) / k - 0.5f, fy = (py + 0.5f) / k - 0.5f, ax = fx - floorf(fx), ay = fy - floorf(fy);
-        int x0 = floorf(fx), y0 = floorf(fy);
-        float v = (ink(x0, y0) * (1 - ax) + ink(x0 + 1, y0) * ax) * (1 - ay) + (ink(x0, y0 + 1) * (1 - ax) + ink(x0 + 1, y0 + 1) * ax) * ay;
-        if (v >= 0.5f) g.drawPixel(x + q.xOffset * k + px, y + q.yOffset * k + py, color);
-      }
-    x += q.xAdvance * k;
-  }
 }
 
 // The "Today" page: day number, weekday, month and year, and the moon's phase.
@@ -365,30 +386,18 @@ void drawToday(Adafruit_GFX &g, time_t t) {
   tm d;
   gmtime_r(&t, &d);
   char s[24];
-  int16_t x1, y1;
-  uint16_t w, h;
+  const int top = 76, x = 64;
   g.fillScreen(GxEPD_WHITE);
-  g.setTextColor(GxEPD_RED);
-  g.setFont(&FreeSansBold24pt7b);
-  g.setTextSize(6);
   snprintf(s, sizeof s, "%d", d.tm_mday);
-  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  drawBig(g, FreeSansBold24pt7b, s, 230 - w / 2 - x1, 300, 6, GxEPD_RED);
-  g.setTextSize(1);
-  g.setTextColor(GxEPD_BLACK);
+  text(g, Num210, s, x, top);
   strftime(s, sizeof s, "%A", &d);
-  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  g.setCursor(230 - w / 2 - x1, 380);
-  g.print(s);
-  g.setFont(&FreeSansBold18pt7b);
+  text(g, Large, s, x, top + 211 + 44 + LARGE_CAP);
   strftime(s, sizeof s, "%B %Y", &d);
-  g.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  g.setCursor(230 - w / 2 - x1, 430);
-  g.print(s);
+  text(g, Text, s, x, top + 211 + 44 + LARGE_CAP + 20 + TEXT_CAP);
   // Moon: days since the new moon of 6 Jan 2000 18:14 UTC, in mean synodic months. The real moon runs
   // up to about 14 hours ahead of or behind this mean, so the phase is right to within about a day.
   float p = fmodf((t / 86400.0 - 10962.76) / 29.530589, 1);
-  const int cx = 600, cy = 200, r = 110;
+  const int cx = 600, cy = top + 120, r = 120;
   g.fillCircle(cx, cy, r, GxEPD_BLACK);
   for (int y = -r; y <= r; y++) {  // the lit part, as seen from the northern hemisphere
     float hw = sqrtf(r * r - y * y), edge = hw * cosf(2 * PI * p);
@@ -399,10 +408,7 @@ void drawToday(Adafruit_GFX &g, time_t t) {
   g.drawCircle(cx, cy, r + 1, GxEPD_BLACK);
   static const char *const names[] = {"New moon", "Waxing crescent", "First quarter", "Waxing gibbous",
                                       "Full moon", "Waning gibbous", "Last quarter", "Waning crescent"};
-  g.setFont(&FreeSans12pt7b);
-  g.getTextBounds(names[int(p * 8 + 0.5f) % 8], 0, 0, &x1, &y1, &w, &h);
-  g.setCursor(cx - w / 2 - x1, cy + r + 50);
-  g.print(names[int(p * 8 + 0.5f) % 8]);
+  text(g, Text, names[int(p * 8 + 0.5f) % 8], cx, top + 211 + 44 + LARGE_CAP + 20 + TEXT_CAP, 0);
   drawBattery(g);
 }
 
@@ -695,7 +701,7 @@ bool fetchArt(uint32_t deadline) {
   JRESULT r = ok && work ? jd_prepare(&jd, jpegIn, work, 4096, &j) : JDR_PAR;
   ok = r == JDR_OK;  // progressive JPEGs fail here (JDR_FMT3)
   if (ok) {
-    j.h = label.length() ? H - LABEL_H : H;
+    j.h = label.length() && dateMode() != 4 ? H - LABEL_H : H;  // split shows the label beside the picture
     int scale = 0;  // the decoder can shrink by 1/2, 1/4, 1/8 while staying at least frame size
     while (scale < 3 && (jd.width >> (scale + 1)) >= W && (jd.height >> (scale + 1)) >= j.h) scale++;
     int sw = jd.width >> scale, sh = jd.height >> scale;
@@ -964,7 +970,7 @@ void session(bool resetWifi) {
       if (isalnum(c) || c == '-' || c == '_') key += c;  // it goes into a URL and into JSON
     prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 2));
     prefs.putUChar("src", server.arg("src") == "1");  // 0 museum art, 1 random photos
-    prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 3));
+    prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 4));
     prefs.putInt("tz", server.arg("tz") == "auto" ? AUTO_TZ : constrain(server.arg("tz").toInt(), -720, 840));
     prefs.putString("key", key.substring(0, 80));
     changed = true;
@@ -983,9 +989,13 @@ void session(bool resetWifi) {
     canvas = new GFXcanvas16(W, H);
     uint8_t *out = (uint8_t *)ps_malloc(PHOTO_BYTES);
     lowBattery = server.hasArg("low");
+    benchDate = server.hasArg("date") ? server.arg("date").toInt() : -1;
+    benchT = server.arg("t").toInt();
+    if (server.hasArg("label")) prefs.putString("label", server.arg("label"));  // to try long titles
+    active();
     if (server.arg("w") == "flat") paint(drawFlat);
     else if (server.arg("w") == "art") showFile("/art.bin");
-    else if (server.arg("w") == "today") paint([](Adafruit_GFX &g) { drawToday(g, server.arg("t").toInt()); });
+    else if (server.arg("w") == "today") paint([](Adafruit_GFX &g) { drawToday(g, benchT); });
     else showFile(photoPath(server.arg("seq").toInt()));
     for (int i = 0; i < W * H; i++) {
       int k = 1;
@@ -995,6 +1005,8 @@ void session(bool resetWifi) {
     }
     server.send_P(200, "application/octet-stream", (const char *)out, PHOTO_BYTES);
     free(out);
+    benchDate = -1;
+    benchT = 0;
     delete canvas;
     canvas = nullptr;
   });

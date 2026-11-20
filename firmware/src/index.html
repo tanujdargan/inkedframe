@@ -312,6 +312,7 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
         <label><span class="pict"><i style="right:3px;bottom:3px;width:14px;height:5px"></i></span><input type="radio" name="date" value="1">Corner</label>
         <label><span class="pict"><i style="left:0;right:0;bottom:0;height:6px"></i></span><input type="radio" name="date" value="2">Banner</label>
         <label><span class="pict"><i style="left:3px;bottom:3px;width:12px;height:12px"></i></span><input type="radio" name="date" value="3">Big</label>
+        <label><span class="pict"><i style="right:0;top:0;bottom:0;width:17px"></i></span><input type="radio" name="date" value="4">Split</label>
       </div>
     </fieldset>
     <label class="field" for="tz"><span>Time zone</span><select id="tz" name="tz"><option value="auto">Automatic</option></select></label>
@@ -757,7 +758,7 @@ function ask(text, ok) {
 }
 
 // ---------- settings ----------
-const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today'], DATES = ['no date', 'date in the corner', 'date banner', 'big date'];
+const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today'], DATES = ['no date', 'date in the corner', 'date banner', 'big date', 'split with the date'];
 const SHOW_HINTS = ['Your photos, a different one each day.', 'A new picture from the internet every day.', 'A calendar page with the date and the moon.'];
 for (const m of [-720,-660,-600,-570,-540,-480,-420,-360,-300,-240,-210,-180,-120,-60,0,60,120,180,210,240,270,300,330,345,360,390,420,480,525,540,570,600,630,660,720,765,780,840]) {
   const a = Math.abs(m);

@@ -22,9 +22,9 @@ The look, date and caption apply to all the photos chosen together. The browser 
 
 The gear button (or "Frame settings") opens the settings (saved on the frame, kept across power loss):
 
-- **Show**: "My photos" (default), "Artwork" (a new picture every day instead of the stored photos) or "Today" (a calendar page: the day number in red, the weekday, month and year, and the moon's phase).
+- **Show**: "My photos" (default), "Artwork" (a new picture every day instead of the stored photos) or "Today" (a calendar page: a large day number, the weekday, month and year, and the moon's phase, all in black).
 - **Artwork**: "Museum art" (default: one of 223 public-domain paintings and prints from the Metropolitan Museum of Art, with its title and artist in a strip along the bottom) or "Random photos" (a random landscape-format photograph from Lorem Picsum).
-- **Date**: Off (default), Corner (a short date such as "Thu 19 Nov" in the bottom right corner), Banner (a white strip along the bottom with the weekday and full date) or Big (a large day number with the month and weekday, bottom left). The date is black on a white box so it can be read over any picture.
+- **Date**: Off (default), Corner (a short date such as "Thu 19 Nov" in the bottom right corner), Banner (a white strip along the bottom, the weekday on the left and the full date on the right), Big (a large day number with the month and weekday, bottom left) or Split (the middle 480x480 of the picture on the left, and a white column on the right with the weekday, a very large day number, the month and the year; museum art has its title and artist at the bottom of that column instead of in a strip). The date is black on white so it can be read over any picture. The Today page ignores this setting.
 - **Time zone**: Automatic (default: looked up from the frame's internet address each day) or a fixed UTC offset.
 - **Unsplash access key** (optional, shown when Artwork is set to Random photos): with a free key from unsplash.com/developers, Random photos asks Unsplash for a landscape photo instead of using Lorem Picsum. The key is hidden as dots; the eye button next to it shows it for checking or editing.
 
@@ -142,7 +142,7 @@ Museum art comes straight from `images.metmuseum.org`. The list of 223 works (fr
 
 Lorem Picsum and Unsplash only serve progressive JPEGs, which the ROM decoder cannot read, so Random photos are fetched through the free image proxy [wsrv.nl](https://wsrv.nl), which re-encodes them as baseline JPEGs.
 
-The Today page is drawn on the frame. The day number is the 24-point font enlarged six times with smoothing. The moon's phase is worked out from the date as days since the new moon of 6 January 2000 in mean synodic months (29.53 days). The real moon runs up to about 14 hours ahead of or behind that mean, so the phase shown is right to within about a day.
+The date styles and the Today page use Inter, rendered by `tools/fonts.py` at the pixel sizes the panel shows (from 22 px text to 210 px tall digits) into Adafruit GFX fonts in `firmware/src/fonts.h`, about 85 KB of flash. Edges are 1-bit (the panel has no greys), but nothing is enlarged. To change a size or weight, edit `FONTS` in that script and run `uv run --with pillow python3 tools/fonts.py`; it downloads the font once into `tools/.cache/`. The digit fonts are anchored at the top of the digits, not the baseline, because GFX glyph offsets are 8-bit. With Split, the frame fetches artwork the full height of the panel, since the label goes beside it. The moon's phase is worked out from the date as days since the new moon of 6 January 2000 in mean synodic months (29.53 days). The real moon runs up to about 14 hours ahead of or behind that mean, so the phase shown is right to within about a day.
 
 ### Photo format
 
@@ -215,12 +215,14 @@ One non-obvious finding: the panel's control lines must be held low whenever the
 - Museum images are about 600 pixels wide, so museum art is enlarged and a little soft, and cropped to the frame's shape: up to about a third of a tall picture is cut off.
 - A pinned photo needs the clock, so pinning one makes the frame join Wi-Fi once a day.
 - Photos are uploaded as finished frame images, so a look or caption cannot be changed afterwards: upload the photo again.
+- With the Split date style the left side shows only the middle 480 columns of each photo, so the sides of a greeting or caption band are cut off.
 - The HTTPS connections for artwork do not check certificates (a CA bundle would not fit comfortably in flash). The pictures are public, but the optional Unsplash key is sent over such a connection, so someone able to intercept the frame's traffic could read it. Use a free key you do not mind losing. The key is also visible to anyone who opens the upload page.
 - The date and time zone lookups need the internet; with no internet the frame uses its own clock, which loses the time after a power loss (no date is drawn until it has synced again).
 
 ## Credits
 
 - [GxEPD2](https://github.com/ZinggJM/GxEPD2) by Jean-Marc Zingg, the panel driver.
+- [Inter](https://github.com/rsms/inter) by The Inter Project Authors, the typeface for the date and the Today page, under the SIL Open Font License 1.1 (`firmware/src/fonts-OFL.txt`).
 - Museum art: public-domain images from [The Metropolitan Museum of Art](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) (Open Access, CC0).
 
 ## License
