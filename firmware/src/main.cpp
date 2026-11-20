@@ -571,7 +571,9 @@ uint16_t batteryMv() {  // 0 if absent
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilWake(localNow() % DAY_SECONDS) / prefs.getFloat("drift", 1) + 0.5f;
 #endif
-  sleptAt = syncedAt && clockNow() - syncedAt < DAY_SECONDS / 8 ? clockNow() : 0;  // a trusted start to measure this sleep
+  // A trusted start to measure this sleep by. Not after a power-on: that first sleep measured 0.4 to 0.8%
+  // fast on the bench (3 of 3), against 0.1% for the sleeps after it.
+  sleptAt = esp_reset_reason() == ESP_RST_DEEPSLEEP && syncedAt && clockNow() - syncedAt < DAY_SECONDS / 8 ? clockNow() : 0;
   Serial.printf("sleep %u s, awake %lu ms, screen %d, drift %.5f\n", (unsigned)secs, millis(), prefs.getUChar("screen", 0),
                 prefs.getFloat("drift", 1));
   Serial.flush();
