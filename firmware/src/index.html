@@ -518,7 +518,7 @@ function status() {
   $('#stat').textContent = detail;
   $('#liveBar').hidden = !draw;
   $('#liveBar i').style.width = draw ? `${100 - left / drawSecs * 100}%` : 0;
-  $('#napHome').hidden = draw;  // pressing the button now opens the page only after the drawing
+  $('#napHome').hidden = $('#napPh').hidden = draw;  // pressing the button now opens the page only after the drawing
   $('#countRow').textContent = !loaded ? '' : s ? `${s} of ${max}` : 'None yet';
   $('#phCount').textContent = loaded ? `${s} of ${max} photos` : '';
 }
@@ -916,7 +916,7 @@ $('#delOne').onclick = async () => {
 // that is about to draw awake for longer.
 try { [drawEnd, drawSecs] = sessionStorage.getItem('draw').split(',').map(Number); } catch (e) {}
 if (drawEnd > Date.now()) { finished = true; setAsleep(true); tickLive(); }
-else { tickLive(); api('/status', {}, 8000, 'json').then(apply, () => setAsleep(true)); }
+else { drawEnd = 0; tickLive(); api('/status', {}, 8000, 'json').then(apply, () => setAsleep(true)); }
 </script>
 <script>
 // Light or dark page, chosen with the button at the top and remembered on this phone.
