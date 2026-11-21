@@ -77,7 +77,11 @@ const char *FS_ROOT = "/littlefs";
 //   every white area is left blue (seen on the bench): never wait less than a whole redraw.
 const uint32_t MIN_REDRAW_MS = 32000;
 struct Panel : GxEPD2_730c_GDEP073E01 {
+#ifdef TEST_BUSY_LOOSE  // bench only: listen for BUSY on an unconnected pin pulled high, as a loose wire reads
+  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 11) { _busy_timeout = 60000000; }
+#else
   Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 5) { _busy_timeout = 60000000; }
+#endif
   using GxEPD2_730c_GDEP073E01::refresh;  // keep the windowed overload
   void refresh(bool partial = false) {
     uint32_t t = millis();
@@ -284,6 +288,9 @@ void displayBegin() {
   for (uint8_t pin : PANEL_PINS) gpio_hold_dis((gpio_num_t)pin);
   display.init(0, true, 2, false);
   display.epd2.setBusyCallback(whilePanelBusy);
+#ifdef TEST_BUSY_LOOSE
+  pinMode(11, INPUT_PULLUP);
+#endif
   display.setRotation(rot);
   display.setFullWindow();
 }
