@@ -70,8 +70,23 @@ const size_t MAX_JPEG = 600 * 1024;
 const int LABEL_H = 50;  // the strip under museum art with its title and artist
 const char *FS_ROOT = "/littlefs";
 
-GxEPD2_7C<GxEPD2_730c_GDEP073E01, GxEPD2_730c_GDEP073E01::HEIGHT / 4>
-  display(GxEPD2_730c_GDEP073E01(10, 9, 6, 5));
+// The panel says when a redraw is done on its BUSY wire, and the library believes it. Two guards:
+// - the library gives up after 20 s, but this panel takes about 30, so it used to send "power off"
+//   mid-redraw (the "Busy Timeout!" in old logs): wait up to 60 s instead;
+// - a loose BUSY wire reads "done" at once, the panel is put back in reset seconds into the redraw and
+//   every white area is left blue (seen on the bench): never wait less than a whole redraw.
+const uint32_t MIN_REDRAW_MS = 32000;
+struct Panel : GxEPD2_730c_GDEP073E01 {
+  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 5) { _busy_timeout = 60000000; }
+  using GxEPD2_730c_GDEP073E01::refresh;  // keep the windowed overload
+  void refresh(bool partial = false) {
+    uint32_t t = millis();
+    GxEPD2_730c_GDEP073E01::refresh(partial);
+    if (millis() - t < 15000) Serial.printf("panel said done after %lu ms: check the BUSY wire\n", millis() - t);
+    while (millis() - t < MIN_REDRAW_MS) delay(20);
+  }
+};
+GxEPD2_7C<Panel, Panel::HEIGHT / 4> display{Panel()};
 
 // Photo files hold these indexes, three per byte; same order as PALETTE in index.html.
 const uint16_t COLORS[] = {GxEPD_BLACK, GxEPD_WHITE, GxEPD_YELLOW, GxEPD_RED, GxEPD_BLUE, GxEPD_GREEN};
