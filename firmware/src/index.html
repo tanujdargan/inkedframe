@@ -995,7 +995,7 @@ function openOne(seq) {
   $('#oneDlg').showModal();
 }
 $('#oneDlg').onclose = () => $('#phDlg').open && thumbs();
-$('#showNow').onclick = () => act(one, 'show').then(() => { $('#oneMsg').textContent = 'The frame is showing it now.'; drawFor(DRAW_SECS.send); },
+$('#showNow').onclick = () => act(one, 'show').then(() => { $('#oneMsg').textContent = 'The frame is showing it now.'; finished = true; setAsleep(true); drawFor(DRAW_SECS.send); },
   () => { $('#oneDlg').close(); photosAsleep(); });
 $('#keepBox').onchange = async () => {
   const box = $('#keepBox'), p = stored.find(p => p[0] == one);

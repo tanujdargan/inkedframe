@@ -70,11 +70,13 @@ const size_t MAX_JPEG = 600 * 1024;
 const int LABEL_H = 50;  // the strip under museum art with its title and artist
 const char *FS_ROOT = "/littlefs";
 
-// The panel says when a redraw is done on its BUSY wire, and the library believes it. Two guards:
-// - the library gives up after 20 s, but this panel takes about 30, so it used to send "power off"
-//   mid-redraw (the "Busy Timeout!" in old logs): wait up to 60 s instead;
-// - a loose BUSY wire reads "done" at once, the panel is put back in reset seconds into the redraw and
-//   every white area is left blue (seen on the bench): never wait less than a whole redraw.
+// The panel says when a redraw is done on its BUSY wire, and the library believes it. A healthy redraw,
+// measured 11 times: power on 0.18 s, refresh 28.6 s, power off 0.14 s. Two guards against a bad wire:
+// - one that reads "busy" for ever: the library gives up after a limit. Its own 20 s is less than a
+//   refresh (it used to send "power off" mid-redraw, the "Busy Timeout!" in old logs), so 45 s for the
+//   refresh and 5 s for the short waits: 55 s at worst;
+// - one that reads "done" at once: the panel would be put back in reset seconds into the redraw, with
+//   every white area left blue (seen on the bench). Then wait out a whole redraw by the clock instead.
 const uint32_t MIN_REDRAW_MS = 32000;
 #ifdef DIAG_REDRAWS  // bench only, see diag(): what BUSY did during each redraw
 struct Diag {
@@ -86,21 +88,30 @@ struct Diag {
   }
 } dg;
 #endif
+void breathe(uint8_t r, uint8_t g, uint8_t b);
 struct Panel : GxEPD2_730c_GDEP073E01 {
 #ifdef TEST_BUSY_LOOSE  // bench only: listen for BUSY on an unconnected pin pulled high, as a loose wire reads
-  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 11) { _busy_timeout = 60000000; }
+  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 11) { _busy_timeout = SHORT_WAIT; }
 #else
-  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 5) { _busy_timeout = 60000000; }
+  Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 5) { _busy_timeout = SHORT_WAIT; }
 #endif
+  static const uint32_t SHORT_WAIT = 5000000, REFRESH_WAIT = 45000000;  // microseconds
   using GxEPD2_730c_GDEP073E01::refresh;  // keep the windowed overload
   void refresh(bool partial = false) {
+    _PowerOn();
     uint32_t t = millis();
+    _busy_timeout = REFRESH_WAIT;
     GxEPD2_730c_GDEP073E01::refresh(partial);
+    _busy_timeout = SHORT_WAIT;
 #ifdef DIAG_REDRAWS
     dg.refresh = millis() - t;
 #endif
-    if (millis() - t < 15000) Serial.printf("panel said done after %lu ms: check the BUSY wire\n", millis() - t);
-    while (millis() - t < MIN_REDRAW_MS) delay(20);
+    if (millis() - t >= 15000) return;
+    Serial.printf("panel said done after %lu ms: check the BUSY wire\n", millis() - t);
+    while (millis() - t < MIN_REDRAW_MS) {
+      breathe(40, 20, 0);
+      delay(20);
+    }
   }
 #ifdef DIAG_REDRAWS
   void hibernate() {
@@ -1153,7 +1164,8 @@ void session(bool resetWifi) {
     char json[600];
     int len = snprintf(json, sizeof json,
              "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"date\":%u,\"rot\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
-             n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : soc >> 8, prefs.getUChar("show", 0),
+             n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : min(soc >> 8, 100),  // the gauge counts past 100 on a full cell
+              prefs.getUChar("show", 0),
              prefs.getUChar("src", 0), prefs.getUChar("date", 0), rot, tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
     for (int i = n - 1; i >= 0; i--) len += snprintf(json + len, sizeof json - len, "[%u,%u]%s", seqs[i], meta(seqs[i]), i ? "," : "]}");
     if (!n) strcat(json, "]}");
