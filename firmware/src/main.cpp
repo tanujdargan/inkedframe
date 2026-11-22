@@ -76,6 +76,16 @@ const char *FS_ROOT = "/littlefs";
 // - a loose BUSY wire reads "done" at once, the panel is put back in reset seconds into the redraw and
 //   every white area is left blue (seen on the bench): never wait less than a whole redraw.
 const uint32_t MIN_REDRAW_MS = 32000;
+#ifdef DIAG_REDRAWS  // bench only, see diag(): what BUSY did during each redraw
+struct Diag {
+  uint32_t start, refresh, off, naps, spurious;  // spurious: woken by BUSY, which then read busy again
+  uint8_t edges;
+  struct { uint16_t at; uint8_t level; } edge[16];  // at: in units of 10 ms since the redraw began
+  void see(int level) {
+    if (edges < 16 && (!edges || edge[edges - 1].level != level)) edge[edges++] = {uint16_t((millis() - start) / 10), uint8_t(level)};
+  }
+} dg;
+#endif
 struct Panel : GxEPD2_730c_GDEP073E01 {
 #ifdef TEST_BUSY_LOOSE  // bench only: listen for BUSY on an unconnected pin pulled high, as a loose wire reads
   Panel() : GxEPD2_730c_GDEP073E01(10, 9, 6, 11) { _busy_timeout = 60000000; }
@@ -86,9 +96,19 @@ struct Panel : GxEPD2_730c_GDEP073E01 {
   void refresh(bool partial = false) {
     uint32_t t = millis();
     GxEPD2_730c_GDEP073E01::refresh(partial);
+#ifdef DIAG_REDRAWS
+    dg.refresh = millis() - t;
+#endif
     if (millis() - t < 15000) Serial.printf("panel said done after %lu ms: check the BUSY wire\n", millis() - t);
     while (millis() - t < MIN_REDRAW_MS) delay(20);
   }
+#ifdef DIAG_REDRAWS
+  void hibernate() {
+    uint32_t t = millis();
+    GxEPD2_730c_GDEP073E01::hibernate();
+    dg.off = millis() - t;
+  }
+#endif
 };
 GxEPD2_7C<Panel, Panel::HEIGHT / 4> display{Panel()};
 
@@ -147,6 +167,10 @@ void whilePanelBusy(const void *) {
     delay(10);
     return;
   }
+#ifdef DIAG_REDRAWS
+  dg.naps++;
+  dg.see(digitalRead(5));
+#endif
   if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_enable(GPIO_NUM_5, GPIO_INTR_HIGH_LEVEL);  // BUSY goes high when the panel is done
   if (!pressed) gpio_wakeup_enable(BUTTON, GPIO_INTR_LOW_LEVEL);  // a press is remembered, see sleepNow()
@@ -154,6 +178,10 @@ void whilePanelBusy(const void *) {
   esp_sleep_enable_timer_wakeup(watched ? 60000 : 1000000);  // watched: wake often enough to breathe smoothly
   esp_light_sleep_start();
   breathe(40, 20, 0);
+#ifdef DIAG_REDRAWS
+  dg.see(digitalRead(5));
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO && digitalRead(5) == LOW && digitalRead(BUTTON) == HIGH) dg.spurious++;
+#endif
   if (digitalRead(BUTTON) == LOW) pressed = true;
   gpio_wakeup_disable(GPIO_NUM_5);
   gpio_wakeup_disable(BUTTON);
@@ -1262,6 +1290,35 @@ void session(bool resetWifi) {
   showSendPhotos();
 }
 
+#ifdef DIAG_REDRAWS
+// Bench only: redraw stored photos for ever, the way a button press does (radio off, light sleep while
+// the panel is busy), and report what the BUSY wire did. USB drops during light sleep and lines printed
+// then are lost, so the whole history is printed again after every redraw.
+void diag() {
+  static Diag log[DIAG_REDRAWS];
+  uint32_t seqs[MAX_PHOTOS + 1];
+  int n = listPhotos(seqs), done = 0;
+  for (int i = 0; n; i++) {
+    dg = {};
+    dg.start = millis();
+    if (!showFile(photoPath(seqs[i % n]), meta(seqs[i % n]) & TALL)) continue;
+    uint32_t total = millis() - dg.start;
+    log[done % DIAG_REDRAWS] = dg;
+    log[done++ % DIAG_REDRAWS].start = total;
+    led(0, 12, 0);
+    delay(4000);  // USB comes back
+    for (int k = 0; k < min(done, DIAG_REDRAWS); k++) {
+      Diag &d = log[k];
+      Serial.printf("redraw %d of %d: total %lu refresh %lu off %lu naps %lu spurious %lu edges", k + 1, done, d.start, d.refresh,
+                    d.off, d.naps, d.spurious);
+      for (int e = 0; e < d.edges; e++) Serial.printf(" %u0ms=%u", d.edge[e].at, d.edge[e].level);
+      Serial.println();
+    }
+    delay(11000);  // long enough to start a flash
+  }
+}
+#endif
+
 // Keep a new firmware from the updater on probation; session() confirms it, sleepNow() rolls it back.
 extern "C" bool verifyRollbackLater() { return true; }
 
@@ -1294,6 +1351,10 @@ void setup() {
   Serial.printf("wake cause=%d button=%d firmware %s ota state %d\n", (int)cause, digitalRead(BUTTON), FW_VERSION, (int)state);
   LittleFS.begin(true, FS_ROOT, 5, "photos");
   LittleFS.remove("/up.tmp");
+#ifdef DIAG_REDRAWS
+  watched = true;
+  diag();
+#endif
 
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
     if (!flat()) online() ? daily() : rotate();
