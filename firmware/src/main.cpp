@@ -29,7 +29,6 @@
 #include <qrcode.h>
 #include <rom/tjpgd.h>  // the JPEG decoder in the chip's ROM: costs no flash
 #include "fonts.h"
-#include "met.h"
 
 #ifndef ROTATE_SECONDS
 #define ROTATE_SECONDS 86400  // how often the stored photos rotate
@@ -791,6 +790,31 @@ bool ditherToFile(uint8_t *rgb, const char *path) {
   return ok;
 }
 
+// How many paintings the museum has on view (439 when written). Only the range to pick from: past the
+// end the reply is empty and the frame asks again.
+const int CMA_ON_VIEW = 430;
+
+// The text after "key": " in a JSON reply, from position `from`, as ASCII for the panel's font:
+// \u00e9 becomes e, a dash becomes -, anything else outside ASCII is dropped.
+String jsonText(const String &json, const char *key, int from) {
+  static const char FOLD[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";  // U+00C0 to U+00FF
+  String out, k = String("\"") + key + "\": \"";
+  int i = from < 0 ? -1 : json.indexOf(k, from);
+  if (i < 0) return out;
+  for (i += k.length(); i < (int)json.length() && json[i] != '"'; i++) {
+    if (json[i] != '\\') {
+      if (json[i] >= ' ' && json[i] < 127 && json[i] != '|') out += json[i];
+    } else if (json[++i] == 'u') {
+      long c = strtol(json.substring(i + 1, i + 5).c_str(), nullptr, 16);
+      i += 4;
+      if (c >= 0xC0 && c <= 0xFF) out += FOLD[c - 0xC0];
+      else if (c == 0x2013 || c == 0x2014) out += '-';
+      else if (c == 0x2018 || c == 0x2019) out += '\'';
+    } else if (json[i] == '"' || json[i] == '/') out += json[i];
+  }
+  return out;
+}
+
 bool fetchArt(uint32_t deadline) {
   uint32_t t0 = millis();
   WiFiClientSecure tls;
@@ -808,16 +832,29 @@ bool fetchArt(uint32_t deadline) {
 #if ROTATE_SECONDS < 86400
   if (benchPicsum) key = "";
 #endif
-  if (!prefs.getUChar("src", 0)) {  // museum art: a different work from the list each day
-    int prev = prefs.getUShort("met", 0), i = esp_random() % (MET_COUNT - 1);
-    i += i >= prev;
-    const char *p = MET;
-    for (int k = 0; k < i; k++) p = strchr(p, '\n') + 1;
-    String line(p, strchr(p, '\n') - p);
-    int bar = line.indexOf('|');
-    url = "https://images.metmuseum.org/CRDImages/" + line.substring(0, 2) + "/web-large" + line.substring(2, bar);
-    label = line.substring(bar + 1);
-    prefs.putUShort("met", i);
+  bool museum = !prefs.getUChar("src", 0);
+  if (museum) {
+    // A painting the Cleveland Museum of Art has on its walls, picked at random through its open access
+    // API (public domain, no key). One made for the other way up would be cropped badly: ask again.
+    for (int tries = 0; tries < 4 && !label.length() && millis() < deadline; tries++) {
+      String json = http.begin(tls, "https://openaccess-api.clevelandart.org/api/artworks/?cc0=1&has_image=1&type=Painting&currently_on_view=1"
+                                    "&limit=1&fields=title,creators,images&skip=" + String(esp_random() % CMA_ON_VIEW)) &&
+                    http.GET() == 200 ? http.getString() : "";
+      http.end();
+      int web = json.indexOf("\"web\"");
+      String link = jsonText(json, "url", web), title = jsonText(json, "title", 0), artist = jsonText(json, "description", 0);
+      int w = jsonText(json, "width", web).toInt(), h = jsonText(json, "height", web).toInt();
+      Serial.printf("art: museum try %d: %dx%d %s\n", tries + 1, w, h, title.c_str());
+      if (web < 0 || !link.startsWith("https://") || !w || !h || (w > h) != (W > H)) continue;
+      if (artist.indexOf(" (") > 0) artist.remove(artist.indexOf(" ("));  // "Claude Monet (French, 1840-1926)"
+      if (title.length() > 60) title = title.substring(0, 57) + "...";
+      src = link.substring(8);
+      label = title + "|" + artist;
+    }
+    if (!label.length()) {
+      Serial.println("art: museum request failed");
+      return false;
+    }
   } else if (key.length()) {
     String json = http.begin(tls, "https://api.unsplash.com/photos/random?query=landscape&orientation=" + String(W > H ? "landscape" : "portrait") + "&client_id=" + key) &&
                   http.GET() == 200 ? http.getString() : "";
@@ -832,9 +869,9 @@ bool fetchArt(uint32_t deadline) {
     src += "&w=" + String(W) + "&h=" + String(H) + "&fit=crop&fm=jpg&q=80";
   }
   // picsum and Unsplash only send progressive JPEGs, which the ROM decoder cannot read: wsrv.nl, a free
-  // image proxy, re-encodes them as baseline. The museum's images are baseline already.
-  if (!url.length()) {
-    url = "https://wsrv.nl/?output=jpg&q=85&url=";
+  // image proxy, re-encodes them as baseline. It also shrinks the museum's 800 KB pictures to about 120 KB.
+  {
+    url = String("https://wsrv.nl/?output=jpg&q=85") + (museum ? "&w=1000&h=1000&fit=inside" : "") + "&url=";
     for (char c : src) {
       char e[4];
       snprintf(e, sizeof e, "%%%02X", (uint8_t)c);
