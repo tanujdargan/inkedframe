@@ -604,8 +604,8 @@ uint16_t batteryMv() {  // 0 if absent
 }
 
 #ifdef BENCH_AWAKE
-const uint32_t FAKE_TIMER = 0x71AE4;
-RTC_NOINIT_ATTR uint32_t fakeTimer;  // survives the restart: wake as if the nightly timer had fired
+const uint32_t BENCH_ASLEEP = 0x71AE4;
+RTC_NOINIT_ATTR uint32_t benchAsleep;  // survives the restart
 #endif
 [[noreturn]] void sleepNow() {
   // A deep-sleep wake skips the boot loader's check, so an unproven firmware would stay for good.
@@ -637,19 +637,9 @@ RTC_NOINIT_ATTR uint32_t fakeTimer;  // survives the restart: wake as if the nig
   Wire.end();
   digitalWrite(PIN_I2C_POWER, LOW);
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
-#ifdef BENCH_AWAKE  // bench only: no button to press, so wait awake for a byte on USB instead of sleeping
-  panelOff();
-  Serial.println("bench: asleep (send w to wake as a press, n as the nightly timer)");
-  for (;;) {
-    int c = Serial.read();
-    if (c == 'n') fakeTimer = FAKE_TIMER;
-    if (c == 'w' || c == 'n') ESP.restart();
-    if (digitalRead(BUTTON) == LOW) {
-      while (digitalRead(BUTTON) == LOW) delay(20);
-      ESP.restart();
-    }
-    delay(50);
-  }
+#ifdef BENCH_AWAKE  // bench only: no button to press, so wait awake for a byte on USB instead of sleeping.
+  benchAsleep = BENCH_ASLEEP;  // After a restart: USB does not come back from the redraw's light sleep without one.
+  ESP.restart();
 #endif
   while (digitalRead(BUTTON) == LOW) delay(20);  // a held button would wake us straight away
   panelOff();
@@ -1310,30 +1300,33 @@ void session(bool resetWifi) {
 
 #ifdef DIAG_REDRAWS
 // Bench only: redraw stored photos for ever, the way a button press does (radio off, light sleep while
-// the panel is busy), and report what the BUSY wire did. USB drops during light sleep and lines printed
-// then are lost, so the whole history is printed again after every redraw.
+// the panel is busy), and report what the BUSY wire did. USB drops during light sleep and only a restart
+// brings it back, so the history is kept through a restart after every redraw and printed again.
+RTC_NOINIT_ATTR Diag diagLog[DIAG_REDRAWS];
+RTC_NOINIT_ATTR uint32_t diagDone, diagMagic;
 void diag() {
-  static Diag log[DIAG_REDRAWS];
+  if (diagMagic != 0xD1A6) diagMagic = 0xD1A6, diagDone = 0;
+  delay(3000);  // let the computer open the port
+  for (uint32_t k = diagDone > DIAG_REDRAWS ? diagDone - DIAG_REDRAWS : 0; k < diagDone; k++) {
+    Diag &d = diagLog[k % DIAG_REDRAWS];
+    Serial.printf("redraw %lu: total %lu refresh %lu off %lu naps %lu spurious %lu edges", k + 1, d.start, d.refresh, d.off, d.naps,
+                  d.spurious);
+    for (int e = 0; e < d.edges; e++) Serial.printf(" %u0ms=%u", d.edge[e].at, d.edge[e].level);
+    Serial.println();
+  }
+  delay(10000);  // long enough to start a flash
   uint32_t seqs[MAX_PHOTOS + 1];
-  int n = listPhotos(seqs), done = 0;
-  for (int i = 0; n; i++) {
+  int n = listPhotos(seqs);
+  for (int i = 0; i < n; i++) {
+    uint32_t seq = seqs[(diagDone + i) % n];
     dg = {};
     dg.start = millis();
-    if (!showFile(photoPath(seqs[i % n]), meta(seqs[i % n]) & TALL)) continue;
-    uint32_t total = millis() - dg.start;
-    log[done % DIAG_REDRAWS] = dg;
-    log[done++ % DIAG_REDRAWS].start = total;
-    led(0, 12, 0);
-    delay(4000);  // USB comes back
-    for (int k = 0; k < min(done, DIAG_REDRAWS); k++) {
-      Diag &d = log[k];
-      Serial.printf("redraw %d of %d: total %lu refresh %lu off %lu naps %lu spurious %lu edges", k + 1, done, d.start, d.refresh,
-                    d.off, d.naps, d.spurious);
-      for (int e = 0; e < d.edges; e++) Serial.printf(" %u0ms=%u", d.edge[e].at, d.edge[e].level);
-      Serial.println();
-    }
-    delay(11000);  // long enough to start a flash
+    if (!showFile(photoPath(seq), meta(seq) & TALL)) continue;
+    dg.start = millis() - dg.start;
+    diagLog[diagDone++ % DIAG_REDRAWS] = dg;
+    break;
   }
+  ESP.restart();  // USB does not come back from light sleep without one
 }
 #endif
 
@@ -1343,10 +1336,6 @@ extern "C" bool verifyRollbackLater() { return true; }
 void setup() {
   bootClock = clockNow() - millis() / 1000.0;  // before any sync: the clock kept through the sleep
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-#ifdef BENCH_AWAKE
-  if (fakeTimer == FAKE_TIMER) cause = ESP_SLEEP_WAKEUP_TIMER;
-  fakeTimer = 0;
-#endif
   watched = cause != ESP_SLEEP_WAKEUP_TIMER;
   setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
   panelOff();
@@ -1355,6 +1344,17 @@ void setup() {
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);  // never block on logging when no computer is attached
+#ifdef BENCH_AWAKE
+  if (benchAsleep == BENCH_ASLEEP) {
+    benchAsleep = 0;
+    for (uint32_t t = 0;; delay(50)) {
+      if (millis() - t > 5000) Serial.println("bench: asleep (send w to wake as a press, n as the nightly timer)"), t = millis();
+      int c = Serial.read();
+      if (c == 'n') cause = ESP_SLEEP_WAKEUP_TIMER, watched = false;
+      if (c == 'w' || c == 'n' || digitalRead(BUTTON) == LOW) break;
+    }
+  }
+#endif
   prefs.begin("frame");
   orient(prefs.getUChar("rot", 0));
   esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
