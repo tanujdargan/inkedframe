@@ -66,6 +66,7 @@ const uint16_t WARN_BATTERY_MV = 3550, LOW_BATTERY_MV = 3400, CHARGED_MV = 3900;
 const uint32_t WIFI_TIMEOUT_MS = 20000;
 const int AUTO_TZ = 9999;              // "tz" setting: minutes east of UTC, or this for "look it up"
 const size_t MAX_JPEG = 600 * 1024;
+const int CAPTION_H = 120;  // the least room left under museum art in portrait: a title on two lines and the artist
 const int LABEL_H = 50;  // the strip under museum art with its title and artist
 const char *FS_ROOT = "/littlefs";
 
@@ -507,7 +508,7 @@ bool showFile(const String &path, bool tall) {  // tall: the file was made for p
     if (print) {  // the white under the work: dithering leaves stray ink there, as under the landscape label
       g.fillRect(0, prefs.getUShort("arth", H), W, H, GxEPD_WHITE);
       int e = drawCaption(g, prefs.getUShort("arth", H));
-      if (split) edge = e;
+      edge = split ? e : prefs.getUShort("arth", H);  // the date goes in the picture's corner, clear of the caption
     } else if (label.length() && !dx) {
       drawLabel(g);
       edge = H - LABEL_H;
@@ -905,11 +906,11 @@ bool fetchArt(uint32_t deadline) {
   ok = r == JDR_OK;  // progressive JPEGs fail here (JDR_FMT3)
   if (ok) {
     // Landscape: museum art leaves a strip for its label, except with Split, which shows it beside the
-    // picture. Portrait: museum art keeps its whole width like a print (with Split no taller than 340, to
-    // leave room for the date under its caption); random photos fill the frame, or Split's top 400 rows.
+    // picture. Portrait: museum art keeps its whole width like a print, cropped only if it would leave
+    // no room for its caption (with Split no taller than 340, for the date under the caption too); random photos fill the frame, or Split's top 400 rows.
     bool split = dateMode() == 4, tall = W < H;
     int whole = (long)jd.height * W / jd.width;
-    j.h = !tall ? (label.length() && !split ? H - LABEL_H : H) : label.length() ? std::min(whole, split ? 340 : H) : split ? SPLIT_H : H;
+    j.h = !tall ? (label.length() && !split ? H - LABEL_H : H) : label.length() ? std::min(whole, split ? 340 : H - CAPTION_H) : split ? SPLIT_H : H;
     int scale = 0;  // the decoder can shrink by 1/2, 1/4, 1/8 while staying at least frame size
     while (scale < 3 && (jd.width >> (scale + 1)) >= W && (jd.height >> (scale + 1)) >= j.h) scale++;
     int sw = jd.width >> scale, sh = jd.height >> scale;
