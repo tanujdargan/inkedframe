@@ -605,7 +605,7 @@ uint16_t batteryMv() {  // 0 if absent
 
 #ifdef BENCH_AWAKE
 const uint32_t BENCH_ASLEEP = 0x71AE4;
-RTC_NOINIT_ATTR uint32_t benchAsleep;  // survives the restart
+RTC_NOINIT_ATTR uint32_t benchAsleep;  // survives the sleep
 #endif
 [[noreturn]] void sleepNow() {
   // A deep-sleep wake skips the boot loader's check, so an unproven firmware would stay for good.
@@ -625,6 +625,10 @@ RTC_NOINIT_ATTR uint32_t benchAsleep;  // survives the restart
 #if ROTATE_SECONDS == 86400  // bench builds keep the short fixed interval
   if (online() && clockSet()) secs = untilWake(localNow() % DAY_SECONDS) / prefs.getFloat("drift", 1) + 0.5f;
 #endif
+#ifdef BENCH_AWAKE  // bench only: no button to press, so sleep for a second and then wait awake for a byte on USB.
+  benchAsleep = BENCH_ASLEEP;  // (USB dies in the redraw's light sleep and only a wake from deep sleep revives it.)
+  secs = 1;
+#endif
   // A trusted start to measure this sleep by. Not after a power-on: that first sleep measured 0.4 to 0.8%
   // fast on the bench (3 of 3), against 0.1% for the sleeps after it.
   sleptAt = esp_reset_reason() == ESP_RST_DEEPSLEEP && syncedAt && clockNow() - syncedAt < DAY_SECONDS / 8 ? clockNow() : 0;
@@ -637,10 +641,6 @@ RTC_NOINIT_ATTR uint32_t benchAsleep;  // survives the restart
   Wire.end();
   digitalWrite(PIN_I2C_POWER, LOW);
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
-#ifdef BENCH_AWAKE  // bench only: no button to press, so wait awake for a byte on USB instead of sleeping.
-  benchAsleep = BENCH_ASLEEP;  // After a restart: USB does not come back from the redraw's light sleep without one.
-  ESP.restart();
-#endif
   while (digitalRead(BUTTON) == LOW) delay(20);  // a held button would wake us straight away
   panelOff();
   gpio_deep_sleep_hold_en();
@@ -1300,8 +1300,8 @@ void session(bool resetWifi) {
 
 #ifdef DIAG_REDRAWS
 // Bench only: redraw stored photos for ever, the way a button press does (radio off, light sleep while
-// the panel is busy), and report what the BUSY wire did. USB drops during light sleep and only a restart
-// brings it back, so the history is kept through a restart after every redraw and printed again.
+// the panel is busy), and report what the BUSY wire did. USB drops during light sleep and only a wake from
+// deep sleep brings it back, so the history is kept through a one-second sleep after every redraw.
 RTC_NOINIT_ATTR Diag diagLog[DIAG_REDRAWS];
 RTC_NOINIT_ATTR uint32_t diagDone, diagMagic;
 void diag() {
@@ -1326,7 +1326,9 @@ void diag() {
     diagLog[diagDone++ % DIAG_REDRAWS] = dg;
     break;
   }
-  ESP.restart();  // USB does not come back from light sleep without one
+  gpio_deep_sleep_hold_en();  // USB dies in light sleep and only a wake from deep sleep revives it
+  esp_sleep_enable_timer_wakeup(1000000);
+  esp_deep_sleep_start();
 }
 #endif
 
@@ -1350,9 +1352,12 @@ void setup() {
     for (uint32_t t = 0;; delay(50)) {
       if (millis() - t > 5000) Serial.println("bench: asleep (send w to wake as a press, n as the nightly timer)"), t = millis();
       int c = Serial.read();
-      if (c == 'n') cause = ESP_SLEEP_WAKEUP_TIMER, watched = false;
-      if (c == 'w' || c == 'n' || digitalRead(BUTTON) == LOW) break;
+      if (c == 'w' || c == 'n' || digitalRead(BUTTON) == LOW) {
+        cause = c == 'n' ? ESP_SLEEP_WAKEUP_TIMER : ESP_SLEEP_WAKEUP_UNDEFINED;
+        break;
+      }
     }
+    watched = cause != ESP_SLEEP_WAKEUP_TIMER;
   }
 #endif
   prefs.begin("frame");
