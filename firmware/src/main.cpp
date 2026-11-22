@@ -603,6 +603,10 @@ uint16_t batteryMv() {  // 0 if absent
   return raw < 0 ? 0 : raw * 5UL / 64;
 }
 
+#ifdef BENCH_AWAKE
+const uint32_t FAKE_TIMER = 0x71AE4;
+RTC_NOINIT_ATTR uint32_t fakeTimer;  // survives the restart: wake as if the nightly timer had fired
+#endif
 [[noreturn]] void sleepNow() {
   // A deep-sleep wake skips the boot loader's check, so an unproven firmware would stay for good.
   if (pending) {
@@ -633,6 +637,20 @@ uint16_t batteryMv() {  // 0 if absent
   Wire.end();
   digitalWrite(PIN_I2C_POWER, LOW);
   digitalWrite(NEOPIXEL_POWER, !NEOPIXEL_POWER_ON);
+#ifdef BENCH_AWAKE  // bench only: no button to press, so wait awake for a byte on USB instead of sleeping
+  panelOff();
+  Serial.println("bench: asleep (send w to wake as a press, n as the nightly timer)");
+  for (;;) {
+    int c = Serial.read();
+    if (c == 'n') fakeTimer = FAKE_TIMER;
+    if (c == 'w' || c == 'n') ESP.restart();
+    if (digitalRead(BUTTON) == LOW) {
+      while (digitalRead(BUTTON) == LOW) delay(20);
+      ESP.restart();
+    }
+    delay(50);
+  }
+#endif
   while (digitalRead(BUTTON) == LOW) delay(20);  // a held button would wake us straight away
   panelOff();
   gpio_deep_sleep_hold_en();
@@ -1325,6 +1343,10 @@ extern "C" bool verifyRollbackLater() { return true; }
 void setup() {
   bootClock = clockNow() - millis() / 1000.0;  // before any sync: the clock kept through the sleep
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+#ifdef BENCH_AWAKE
+  if (fakeTimer == FAKE_TIMER) cause = ESP_SLEEP_WAKEUP_TIMER;
+  fakeTimer = 0;
+#endif
   watched = cause != ESP_SLEEP_WAKEUP_TIMER;
   setCpuFrequencyMhz(80);  // plenty for this job, and the lowest speed Wi-Fi allows
   panelOff();
