@@ -73,8 +73,8 @@ const char *FS_ROOT = "/littlefs";
 // The panel says when a redraw is done on its BUSY wire, and the library believes it. A healthy redraw,
 // measured 11 times: power on 0.18 s, refresh 28.6 s, power off 0.14 s. Two guards against a bad wire:
 // - one that reads "busy" for ever: the library gives up after a limit. Its own 20 s is less than a
-//   refresh (it used to send "power off" mid-redraw, the "Busy Timeout!" in old logs), so 45 s for the
-//   refresh and 5 s for the short waits: 55 s at worst;
+//   refresh (it used to send "power off" mid-redraw, the "Busy Timeout!" in old logs), so 45 s for
+//   power on and for the refresh (the library waits for both in one call) and 5 s otherwise: 95 s at worst;
 // - one that reads "done" at once: the panel would be put back in reset seconds into the redraw, with
 //   every white area left blue (seen on the bench). Then wait out a whole redraw by the clock instead.
 const uint32_t MIN_REDRAW_MS = 32000;
@@ -98,7 +98,6 @@ struct Panel : GxEPD2_730c_GDEP073E01 {
   static const uint32_t SHORT_WAIT = 5000000, REFRESH_WAIT = 45000000;  // microseconds
   using GxEPD2_730c_GDEP073E01::refresh;  // keep the windowed overload
   void refresh(bool partial = false) {
-    _PowerOn();
     uint32_t t = millis();
     _busy_timeout = REFRESH_WAIT;
     GxEPD2_730c_GDEP073E01::refresh(partial);
