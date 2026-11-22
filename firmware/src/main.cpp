@@ -834,22 +834,29 @@ bool fetchArt(uint32_t deadline) {
 #endif
   bool museum = !prefs.getUChar("src", 0);
   if (museum) {
-    // A painting the Cleveland Museum of Art has on its walls, picked at random through its open access
-    // API (public domain, no key). One made for the other way up would be cropped badly: ask again.
-    for (int tries = 0; tries < 4 && !label.length() && millis() < deadline; tries++) {
+    // A painting the Cleveland Museum of Art has on its walls, through its open access API (public domain,
+    // no key). Ten neighbours from a random place in its list, about 10 KB, and the first whose shape suits
+    // the way the frame stands: about half are upright, and a square one would lose its top and bottom.
+    for (int tries = 0; tries < 2 && !label.length() && millis() < deadline; tries++) {
       String json = http.begin(tls, "https://openaccess-api.clevelandart.org/api/artworks/?cc0=1&has_image=1&type=Painting&currently_on_view=1"
-                                    "&limit=1&fields=title,creators,images&skip=" + String(esp_random() % CMA_ON_VIEW)) &&
+                                    "&limit=10&fields=title,creators,images&skip=" + String(esp_random() % CMA_ON_VIEW)) &&
                     http.GET() == 200 ? http.getString() : "";
       http.end();
-      int web = json.indexOf("\"web\"");
-      String link = jsonText(json, "url", web), title = jsonText(json, "title", 0), artist = jsonText(json, "description", 0);
-      int w = jsonText(json, "width", web).toInt(), h = jsonText(json, "height", web).toInt();
-      Serial.printf("art: museum try %d: %dx%d %s\n", tries + 1, w, h, title.c_str());
-      if (web < 0 || !link.startsWith("https://") || !w || !h || (w > h) != (W > H)) continue;
-      if (artist.indexOf(" (") > 0) artist.remove(artist.indexOf(" ("));  // "Claude Monet (French, 1840-1926)"
-      if (title.length() > 60) title = title.substring(0, 57) + "...";
-      src = link.substring(8);
-      label = title + "|" + artist;
+      int seen = 0;
+      for (int at = json.indexOf("\"accession_number\": "), next; at >= 0 && !label.length(); at = next, seen++) {
+        next = json.indexOf("\"accession_number\": ", at + 1);
+        String work = json.substring(at, next < 0 ? json.length() : next);
+        int web = work.indexOf("\"web\"");
+        String link = jsonText(work, "url", web), title = jsonText(work, "title", 0), artist = jsonText(work, "description", 0);
+        int w = jsonText(work, "width", web).toInt(), h = jsonText(work, "height", web).toInt();
+        if (!link.startsWith("https://") || !title.length() || (W > H ? w * 10 < h * 12 : h * 10 < w * 12)) continue;
+        if (artist.indexOf(" (") > 0) artist.remove(artist.indexOf(" ("));  // "Claude Monet (French, 1840-1926)"
+        if (title.length() > 60) title = title.substring(0, 57) + "...";
+        src = link.substring(8);
+        label = title + "|" + artist;
+        Serial.printf("art: museum %dx%d %s\n", w, h, label.c_str());
+      }
+      Serial.printf("art: museum try %d: %u bytes, looked at %d\n", tries + 1, json.length(), seen);
     }
     if (!label.length()) {
       Serial.println("art: museum request failed");
