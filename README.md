@@ -1,8 +1,17 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
-
 # inkedframe
 
-inkedframe is an open-source battery photo frame, designed to be built and given as a gift. It uses an Adafruit Feather ESP32-S3 (4 MB flash, 2 MB PSRAM, product 5477), a Waveshare 7.3" Spectra 6 (E6) colour e-ink panel (800x480, six inks) and a 2000 mAh LiPo cell. There is no cloud, no account and no app for daily use. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off. Optionally it can print today's date on the picture, show a different museum painting or print each day, or show a calendar page.
+<img align="left" width="270" alt="Finished inkedframe photo frame" src="https://github.com/user-attachments/assets/6252fa1b-6541-4113-916c-8da981844534" />
+
+inkedframe is an open-source battery photo frame, designed to blend into your house aesthetic. You press the frame's button, open `http://frame.local` on any phone or laptop on the same Wi-Fi and pick photos. The browser crops and dithers them, the frame shows the newest and goes back to sleep. It keeps the last 10 photos and steps through them once a day with the radio off. Optionally it can print today's date on the picture, show a different museum painting or print each day, or show a calendar page.
+
+Cost: ~150$ CAD incl all parts
+
+To build you need: 
+- E6 Spectra 7.3" display
+- ESP32-S3 Feather or any ESP32 with JST and 2MB PSRAM
+- 2000MaH LiPo
+- 8x6 shadowbox (Walnut Wood from Amazon shown in sample)
+- 3d printer to print mat or use a paper mat. 
 
 ## How it is used
 
