@@ -319,8 +319,12 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
   <header><h2 id="setH">Frame settings</h2><button class="icon x" type="button" aria-label="Close" data-i="x"></button></header>
   <form id="settings">
     <fieldset style="margin-top:4px"><legend>What the frame shows</legend>
-      <div class="seg"><label><input type="radio" name="show" value="0">My photos</label><label><input type="radio" name="show" value="1">Artwork</label><label><input type="radio" name="show" value="2">Today</label></div>
+      <div class="seg"><label><input type="radio" name="show" value="0">My photos</label><label><input type="radio" name="show" value="1">Artwork</label><label><input type="radio" name="show" value="3">Shuffle</label><label><input type="radio" name="show" value="2">Today</label></div>
       <p class="hint" id="showHint"></p>
+    </fieldset>
+    <fieldset id="mixset"><legend>Shuffle through</legend>
+      <div class="chips"><label><input type="checkbox" name="mix" value="1">My photos</label><label><input type="checkbox" name="mix" value="2">Museum art</label><label><input type="checkbox" name="mix" value="4">Random photos</label></div>
+      <p class="hint">Each new picture comes from one of these, picked by chance. Choose at least one.</p>
     </fieldset>
     <fieldset id="artset"><legend>Artwork from</legend>
       <div class="seg"><label><input type="radio" name="src" value="0">Museum art</label><label><input type="radio" name="src" value="1">Random photos</label></div>
@@ -330,6 +334,8 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
         <button class="icon" id="eye" type="button" aria-label="Show key" aria-pressed="false" aria-controls="key" data-i="eye"></button></div>
       <p class="hint">Free from unsplash.com/developers. Without it, random photos come from Lorem Picsum.</p>
     </div>
+    <div id="everyset"><label class="field" for="every"><span>Change the picture</span><select id="every" name="every"><option value="1">Every day</option><option value="2">Every 2 days</option><option value="3">Every 3 days</option><option value="7">Every week</option><option value="14">Every 2 weeks</option><option value="30">Every month</option></select></label>
+      <p class="hint" id="everyHint"></p></div>
     <fieldset><legend>Date on the picture</legend>
       <div class="seg">
         <label><span class="pict"></span><input type="radio" name="date" value="0">Off</label>
@@ -523,7 +529,7 @@ function setAsleep(on) {
 // The strip: only its headline is a live region, so the countdown under it is not read out every second.
 // The countdown runs from an end time kept for this visit, so closing a confirmation or a sheet, a
 // reload or a phone that paused the page cannot lose or stretch it.
-const DRAW_SECS = { send: 45, save: 45, art: 60 };  // after a send, after Save, after Save with Artwork
+const DRAW_SECS = { send: 45, save: 45, art: 60 };  // after a send, after Save, after Save with Artwork or Shuffle
 let drawEnd = 0, drawSecs = 0, liveTimer;
 function drawFor(secs) {
   drawSecs = secs; drawEnd = Date.now() + secs * 1000;
@@ -585,7 +591,8 @@ function apply(s) {
   $('#ver').textContent = s.version;
   if (!loaded) {  // fill the form once: a later check must not undo unsaved changes
     const f = $('#settings');
-    f.show.value = s.show; f.src.value = s.src; f.date.value = s.date; f.rot.value = s.rot | 0; f.tz.value = s.tz; f.key.value = s.key;
+    f.show.value = s.show; f.src.value = s.src; f.every.value = [1, 2, 3, 7, 14, 30].includes(s.every) ? s.every : 1; f.date.value = s.date; f.rot.value = s.rot | 0; f.tz.value = s.tz; f.key.value = s.key;
+    for (const c of f.mix) c.checked = s.mix & c.value;
     loaded = true; $('#save').disabled = false; settingsShown();
   }
   status();
@@ -845,8 +852,9 @@ function ask(text, ok) {
 }
 
 // ---------- settings ----------
-const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today'], DATES = ['no date', 'date in the corner', 'date banner', 'big date', 'split with the date'];
-const SHOW_HINTS = ['Your photos, a different one each day.', 'A new picture from the internet every day.', 'A calendar page with the date and the moon.'];
+const form = $('#settings'), SHOWS = ['My photos', 'Artwork', 'Today', 'Shuffle'], DATES = ['no date', 'date in the corner', 'date banner', 'big date', 'split with the date'];
+const SHOW_HINTS = e => [`Your photos, a different one ${e}.`, `A new picture from the internet ${e}.`, 'A calendar page with the date and the moon.',
+  `Your photos and pictures from the internet, a different one ${e}.`];
 const ROTS = ['', 'turned left', 'upside down', 'turned right'], ROT_HINTS = ['The usual way, wider than tall.',
   'Standing tall, a quarter turn to the left (anticlockwise) from Landscape.', 'Half a turn from Landscape.',
   'Standing tall, a quarter turn to the right (clockwise) from Landscape.'];
@@ -856,16 +864,22 @@ for (const m of [-720,-660,-600,-570,-540,-480,-420,-360,-300,-240,-210,-180,-12
   form.tz.add(new Option(`UTC${m < 0 ? '−' : '+'}${String(a / 60 | 0).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`, m));
 }
 function settingsShown() {  // hidden fields are still sent, so Save never forgets the key
-  const show = form.show.value;
-  $('#showHint').textContent = SHOW_HINTS[show] || '';
+  const show = form.show.value, mix = [...form.mix].reduce((m, c) => m | c.checked * c.value, 0);
+  $('#showHint').textContent = SHOW_HINTS(form.every.selectedOptions[0].text.toLowerCase())[show] || '';
+  $('#mixset').hidden = show != 3;
   $('#artset').hidden = show != 1;
-  $('#keyset').hidden = show != 1 || form.src.value != 1;
+  $('#keyset').hidden = !(show == 1 ? form.src.value == 1 : show == 3 && mix & 4);
+  $('#everyset').hidden = show == 2;
+  $('#everyHint').textContent = form.every.value > 1 && form.date.value > 0 ? 'The date on the picture still changes every day.' : '';
   $('#setRow').textContent = loaded ? [SHOWS[show], DATES[form.date.value], ROTS[form.rot.value]].filter(Boolean).join(' · ') : '';
   const r = form.rot.value, other = stored.filter(p => !tallOf(p[1]) != !(r & 1)).length;
   $('#rotHint').textContent = `${ROT_HINTS[r]} The black bar marks the edge that is at the bottom in Landscape. Save, then turn the frame to match.` +
     (other ? ` ${other == 1 ? 'One photo' : `${other} photos`} on the frame ${other == 1 ? 'was' : 'were'} sent for ${way(!(r & 1))}: kept, but not shown this way.` : '');
 }
-form.onchange = settingsShown;
+form.onchange = e => {
+  if (e.target.name == 'mix' && ![...form.mix].some(c => c.checked)) e.target.checked = true;  // Shuffle needs at least one
+  settingsShown();
+};
 $('#eye').onclick = () => {
   const k = form.key, on = k.type == 'password';
   k.type = on ? 'text' : 'password';
@@ -882,7 +896,7 @@ async function save() {
     out.innerHTML = `<div class="note ok">${ic('check')}<div><strong>Saved</strong><p>The frame is updating now, about half a minute. Press its button again to change more.</p></div></div>`;
     finished = true;
     setAsleep(true);
-    drawFor(form.show.value == 1 ? DRAW_SECS.art : DRAW_SECS.save);
+    drawFor(form.show.value & 1 ? DRAW_SECS.art : DRAW_SECS.save);
   } catch (e) {
     nap(out, 'The frame has gone to sleep, so this was not saved. Press the button on the frame, then tap Try again.', save);
   }

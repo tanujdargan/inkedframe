@@ -232,8 +232,16 @@ void removePhoto(uint32_t seq) {
 
 // ---------- settings and clock ----------
 
+// Shuffle (setting "show" 3) takes each new picture from one of the kinds ticked in "mix": 1 my photos,
+// 2 museum art, 4 random photos.
+int mix() {
+  int m = prefs.getUChar("mix", 3) & 7;
+  return m ? m : 1;
+}
+
 bool online() {  // needs Wi-Fi once a day
-  if (prefs.getUChar("date", 0) || prefs.getUChar("show", 0)) return true;
+  int show = prefs.getUChar("show", 0);
+  if (prefs.getUChar("date", 0) || (show == 3 ? mix() > 1 : show)) return true;  // Shuffle through my photos alone needs none
   uint32_t seqs[MAX_PHOTOS + 1];
   for (int i = listPhotos(seqs); i--;)
     if (meta(seqs[i]) & PIN) return true;  // a pinned photo needs the right date
@@ -244,6 +252,30 @@ bool clockSet() { return time(nullptr) > 1700000000; }  // false after a power l
 time_t localNow() {
   int tz = prefs.getInt("tz", AUTO_TZ);
   return time(nullptr) + (tz == AUTO_TZ ? prefs.getInt("tzc", 0) : tz * 60);
+}
+
+// The picture changes every "every" days (1, the default: every night). day: today's local day number,
+// last: the day it last changed. Whole days, so nights missed on a flat cell count too. Either is 0 when
+// the clock was not set, as on a frame used without Wi-Fi: then count the nightly wakes since instead.
+constexpr bool due(uint32_t day, uint32_t last, uint32_t wakes, uint32_t every) {
+  return every < 2 || (day && last ? day - last >= every : wakes >= every);
+}
+static_assert(due(0, 0, 1, 1) && due(20000, 20000, 1, 1) && !due(20006, 20000, 6, 7) && due(20007, 20000, 7, 7) &&
+              !due(20003, 20000, 1, 7) && due(20009, 20000, 4, 7) && !due(0, 0, 6, 7) && due(0, 0, 7, 7) &&
+              !due(0, 20000, 2, 3) && due(0, 20000, 3, 3) && due(19999, 20000, 1, 7), "");
+uint32_t dayNow() {  // 0: not known. Bench builds always count wakes: their "day" is a minute
+#if ROTATE_SECONDS == 86400
+  if (clockSet()) return localNow() / DAY_SECONDS;
+#endif
+  return 0;
+}
+bool dueNow(bool tomorrow = false) {  // on this nightly wake (tomorrow: on the one after this early wake)
+  uint32_t day = dayNow();
+  return due(day ? day + tomorrow : 0, prefs.getUInt("chg", 0), prefs.getUChar("wakes", 0) + 1, prefs.getUChar("every", 1));
+}
+void turned() {  // a new picture is up: the days to the next one count from today
+  prefs.putUInt("chg", dayNow());
+  prefs.putUChar("wakes", 0);
 }
 
 // Each daily sleep aims at WAKE_AT from a freshly synced clock. s is the local time of day: a wake
@@ -562,9 +594,14 @@ bool showToday() {
 bool showPhoto(uint32_t seq) {
   if (!showFile(photoPath(seq), meta(seq) & TALL)) return false;
   prefs.putUInt("cur", seq);
+  prefs.putUChar("pic", 0);
   return true;
 }
 bool showArt() { return showFile("/art.bin", prefs.getUShort("arth", 0)); }  // arth: 0 made for landscape
+bool artUp() {  // the usual picture on the panel is the artwork ("pic" 1), not the photo "cur"
+  int show = prefs.getUChar("show", 0);
+  return show & 1 && prefs.getUChar("pic", show == 1);  // only with artwork or Shuffle
+}
 
 // A plain text screen: a title, short lines (an empty one is a small gap) and optionally a figure 240 px
 // wide and fh tall, the setup QR code or a battery: beside the text in landscape, above it in portrait.
@@ -698,17 +735,48 @@ uint32_t pinnedToday() {  // the newest photo pinned to today's date, or 0
   return 0;
 }
 
-void rotate() {
-  uint32_t seqs[MAX_PHOTOS + 1];
+// Shuffle's next photo is any but the one before: the r'th of the other n - 1, counting on from at
+// (-1: the one before is not among them).
+constexpr int other(int n, int at, uint32_t r) { return n < 2 || at < 0 ? r % n : (at + 1 + r % (n - 1)) % n; }
+static_assert(other(1, 0, 7) == 0 && other(2, 0, 6) == 1 && other(2, 1, 7) == 0 && other(3, 1, 0) == 2 && other(3, 1, 1) == 0 &&
+              other(3, 1, 2) == 2 && other(3, -1, 5) == 2 && other(10, 9, 8) == 8, "");
+
+int turns(uint32_t *seqs) {  // the photos that take turns: made for the way the frame stands, and not pinned
   int n = 0;
   for (int i = 0, all = listPhotos(seqs); i < all; i++)
     if (!(meta(seqs[i]) & PIN) && fits(seqs[i])) seqs[n++] = seqs[i];  // pinned photos wait for their day
-  // Nothing to rotate to. With the date on, or after a pinned day, redraw even one.
-  if (n < (prefs.getUChar("date", 0) || prefs.getUChar("screen", 0) ? 1 : 2)) return;
-  uint32_t cur = prefs.getUInt("cur", 0), next = seqs[n - 1];
+  return n;
+}
+
+// turn: on to another photo, the next older or for Shuffle (any) any other. Otherwise the same one again,
+// for its new date.
+bool rotate(bool turn, bool any) {
+  uint32_t seqs[MAX_PHOTOS + 1], cur = prefs.getUInt("cur", 0);
+  int n = turns(seqs), at = -1;
+  bool art = artUp();
+  // Nothing to rotate to. With the date on, after a pinned day, or after artwork, draw even one.
+  if (n < (prefs.getUChar("date", 0) || prefs.getUChar("screen", 0) || art ? 1 : 2)) return false;
+  uint32_t next = seqs[n - 1];
   for (int i = n - 1; i >= 0; i--)
     if (seqs[i] < cur) { next = seqs[i]; break; }  // step to the next older, wrap to newest
-  showPhoto(next);
+  for (int i = n; i--;)
+    if (seqs[i] == cur) at = i;
+  if (!turn && at >= 0) next = cur;  // (not among them, deleted or made for the other way: on to another after all)
+  else if (any) next = seqs[other(n, at, esp_random())];
+  if (!showPhoto(next)) return false;
+  if (next != cur || art) turned();
+  return true;
+}
+
+// Where a new picture comes from: 0 my photos, 1 museum art, 2 random photos. Shuffle takes one of its
+// kinds, each as likely as the others, and leaves my photos out while there is no other photo to show.
+int source() {
+  int show = prefs.getUChar("show", 0), m = mix(), s = 0;
+  uint32_t seqs[MAX_PHOTOS + 1];
+  if (show != 3) return show == 1 ? 1 + prefs.getUChar("src", 0) : 0;
+  if (m > 1 && turns(seqs) < 2 - artUp()) m &= 6;
+  for (int k = esp_random() % __builtin_popcount(m); !(m >> s & 1) || k--;) s++;
+  return s;
 }
 
 // ---------- artwork: one picture a day, decoded and dithered here into the photo format ----------
@@ -816,7 +884,7 @@ String jsonText(const String &json, const char *key, int from) {
   return out;
 }
 
-bool fetchArt(uint32_t deadline) {
+bool fetchArt(uint32_t deadline, bool museum) {
   uint32_t t0 = millis();
   WiFiClientSecure tls;
   // No certificate check: these are public pictures, and the CA bundle would not fit comfortably in
@@ -833,7 +901,6 @@ bool fetchArt(uint32_t deadline) {
 #if ROTATE_SECONDS < 86400
   if (benchPicsum) key = "";
 #endif
-  bool museum = !prefs.getUChar("src", 0);
   if (museum) {
     // A painting the Cleveland Museum of Art has on its walls, through its open access API (public domain,
     // no key). Ten neighbours from a random place in its list, about 10 KB, and the first whose shape suits
@@ -936,11 +1003,36 @@ bool fetchArt(uint32_t deadline) {
   return ok;
 }
 
+// A new picture: the artwork just fetched, or another photo (my photos, and Shuffle with them ticked:
+// also when its fetch failed).
+bool change(bool fresh, int show) {
+  if (!fresh) return (!show || (show == 3 && mix() & 1)) && rotate(true, show == 3);
+  if (!showArt()) return false;
+  prefs.putUChar("pic", 1);
+  turned();
+  return true;
+}
+
+// The nightly picture, radio off: the photo pinned to today, the Today page, a new picture when one is
+// due, or else the same one again if its date has changed or a pinned day is over. fresh: artwork was
+// fetched for it.
+void nightly(bool fresh) {
+  int show = prefs.getUChar("show", 0), wakes = prefs.getUChar("wakes", 0);
+  bool turn = fresh || dueNow();
+  if (prefs.getUChar("every", 1) > 1 && wakes < 255) prefs.putUChar("wakes", wakes + 1);
+  uint32_t pin = pinnedToday();
+  if (pin && showFile(photoPath(pin), meta(pin) & TALL)) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
+  else if (show == 2) showToday();
+  else if ((turn && change(fresh, show)) || !(prefs.getUChar("date", 0) || prefs.getUChar("screen", 0))) return;  // nothing new to draw
+  else if (artUp()) showArt();  // not due, or a failed fetch: keep the picture
+  else rotate(false, show == 3);
+}
+
 // ---------- timer wake with the date or artwork on: one short Wi-Fi visit a day ----------
 
 void daily() {
   uint32_t deadline = millis() + 30000;  // a dead router or internet must not keep the frame awake
-  int show = prefs.getUChar("show", 0);  // 0 my photos, 1 artwork, 2 today
+  int show = prefs.getUChar("show", 0);  // 0 my photos, 1 artwork, 2 today, 3 shuffle
   bool early = wokeEarly, fresh = artReady;  // the last wake came just before midnight, synced and fetched
   wokeEarly = artReady = false;
   Serial.printf("kept clock %ld%s\n", (long)time(nullptr), early ? ", synced on the wake before" : "");
@@ -968,19 +1060,16 @@ void daily() {
     // Woke before midnight: fetch tonight's art now; sleepNow() sleeps the rest, and that wake needs no Wi-Fi.
     wokeEarly = clockSet() && localNow() % DAY_SECONDS >= DAY_SECONDS / 2;
 #endif
-    fresh = show == 1 && (wokeEarly || !pinnedToday()) && synced && fetchArt(deadline);
+    // Artwork only on the nights a new picture is due, and for Shuffle only when it is artwork's turn.
+    int from = show & 1 && dueNow(wokeEarly) && (wokeEarly || !pinnedToday()) && synced ? source() : 0;
+    fresh = from && fetchArt(deadline, from == 1);
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     radioOff = true;
     artReady = wokeEarly && fresh;
     if (wokeEarly) return;
   }
-  uint32_t pin = pinnedToday();
-  bool art = show == 1 && !pin;
-  if (pin && showFile(photoPath(pin), meta(pin) & TALL)) prefs.putUChar("screen", 2);  // instead of the usual; rotation resumes tomorrow
-  else if (show == 2) showToday();
-  else if (!art) rotate();
-  else if (fresh || prefs.getUChar("date", 0) || prefs.getUChar("screen", 0)) showArt();  // failed fetch: keep the picture
+  nightly(fresh);
 }
 
 // ---------- upload session ----------
@@ -1207,10 +1296,10 @@ void session(bool resetWifi) {
     int soc = gauge(0x04), tz = prefs.getInt("tz", AUTO_TZ), n = listPhotos(seqs);  // SOC: the high byte is whole percent
     char json[600];
     int len = snprintf(json, sizeof json,
-             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"date\":%u,\"rot\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
+             "{\"photos\":%d,\"max\":%d,\"battery_mv\":%u,\"battery_pct\":%d,\"show\":%u,\"src\":%u,\"mix\":%d,\"every\":%u,\"date\":%u,\"rot\":%u,\"tz\":\"%s\",\"key\":\"%s\",\"version\":\"%s\",\"list\":[",
              n, MAX_PHOTOS, batteryMv(), soc < 0 ? -1 : min(soc >> 8, 100),  // the gauge counts past 100 on a full cell
               prefs.getUChar("show", 0),
-             prefs.getUChar("src", 0), prefs.getUChar("date", 0), rot, tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
+             prefs.getUChar("src", 0), mix(), prefs.getUChar("every", 1), prefs.getUChar("date", 0), rot, tz == AUTO_TZ ? "auto" : String(tz).c_str(), prefs.getString("key").c_str(), FW_VERSION);
     for (int i = n - 1; i >= 0; i--) len += snprintf(json + len, sizeof json - len, "[%u,%u]%s", seqs[i], meta(seqs[i]), i ? "," : "]}");
     if (!n) strcat(json, "]}");
     server.send(200, "application/json", json);
@@ -1219,8 +1308,15 @@ void session(bool resetWifi) {
     String key;
     for (char c : server.arg("key"))
       if (isalnum(c) || c == '-' || c == '_') key += c;  // it goes into a URL and into JSON
-    prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 2));
+    prefs.putUChar("show", constrain(server.arg("show").toInt(), 0, 3));
     prefs.putUChar("src", server.arg("src") == "1");  // 0 museum art, 1 random photos
+    if (server.hasArg("every")) {  // a page from before has neither: "mix" comes once for each kind ticked
+      int m = 0;
+      for (int i = server.args(); i--;)
+        if (server.argName(i) == "mix") m |= server.arg(i).toInt();
+      prefs.putUChar("mix", m & 7);
+      prefs.putUChar("every", constrain(server.arg("every").toInt(), 1, 30));
+    }
     prefs.putUChar("date", constrain(server.arg("date").toInt(), 0, 4));
     if (server.hasArg("rot")) prefs.putUChar("rot", server.arg("rot").toInt() & 3);  // a page from before has none
     orient(prefs.getUChar("rot", 0));
@@ -1245,7 +1341,7 @@ void session(bool resetWifi) {
     if (server.hasArg("rot")) orient(server.arg("rot").toInt());
     if (server.hasArg("src")) prefs.putUChar("src", server.arg("src") == "1");
     benchPicsum = server.hasArg("picsum");
-    if (server.hasArg("fetch")) Serial.printf("bench fetch %d\n", fetchArt(millis() + 30000));  // for this way up and date style
+    if (server.hasArg("fetch")) Serial.printf("bench fetch %d\n", fetchArt(millis() + 30000, !prefs.getUChar("src", 0)));  // for this way up and date style
     if (server.hasArg("label")) prefs.putString("label", server.arg("label"));  // to try long titles
     canvas = new GFXcanvas16(800, 480);  // the panel as it is wired, whichever way the frame stands
     canvas->setRotation(rot);
@@ -1336,14 +1432,16 @@ void session(bool resetWifi) {
   }
   server.stop();
   if (online()) Serial.printf("synced %d\n", syncClock());
-  bool art = prefs.getUChar("show", 0) == 1 && changed && !showSeq;
-  if (art) fetchArt(millis() + 30000);
+  int show = prefs.getUChar("show", 0);
+  bool anew = show & 1 && changed && !showSeq;  // saved with artwork or Shuffle: a new picture now
+  int from = anew ? source() : 0;
+  bool fresh = from && fetchArt(millis() + 30000, from == 1);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   radioOff = true;
-  if (showSeq && showPhoto(showSeq)) return;
-  if (art && showArt()) return;
-  if (changed && prefs.getUChar("show", 0) == 2 && showToday()) return;
+  if (showSeq && showPhoto(showSeq)) return turned();
+  if (anew && (change(fresh, show) || (artUp() && showArt()))) return;  // failed fetch: the picture it has, with the new settings
+  if (changed && show == 2 && showToday()) return;
   if (!changed && !showSeq) return;
   // Redraw with the new settings (perhaps another way up): the current photo, or the newest made for
   // this way up, or a screen asking for photos. Never a picture made for the other way.
@@ -1440,7 +1538,7 @@ void setup() {
 #endif
 
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-    if (!flat()) online() ? daily() : rotate();
+    if (!flat()) online() ? daily() : nightly(false);
   } else {
     // Button still down 5 s after it woke us means "forget Wi-Fi". Count from boot, not from here: the
     // chip and file system take a moment to start, and people release at about 5 s.
